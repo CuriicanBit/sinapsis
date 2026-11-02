@@ -1,0 +1,6 @@
+{
+  "name": "Gestión Presupuestaria TIC - UA Sede Talca",
+  "description": "Sistema de flujo de trabajo para la formulación, asignación contable, aprobación APRE, readecuación presupuestaria y control de proyectos TIC en Universidad Autónoma de Chile, Sede Talca.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

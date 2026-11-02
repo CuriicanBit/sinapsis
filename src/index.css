@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+@theme {
+  --color-ua-red: #da291c;
+  --color-ua-red-hover: #b81e13;
+  --color-ua-orange: #ff6900;
+  --color-ua-orange-hover: #e05c00;
+  --color-ua-black: #000000;
+  --color-ua-dark: #121212;
+  --color-ua-gray: #d2d2d2;
+  --color-ua-gray-light: #f4f4f4;
+  --color-ua-coral: #f79191;
+  --color-ua-coral-light: #fdf2f2;
+}
+
+@layer base {
+  body {
+    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 16px;
+    line-height: 1.5;
+    color: #121212;
+    background-color: #f7f7f8;
+  }
+
+  /* Accessible focus indicators */
+  :focus-visible {
+    outline: 2px solid #da291c;
+    outline-offset: 2px;
+  }
+}
+
+.font-tabular {
+  font-family: 'JetBrains Mono', monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+@media print {
+  header, nav, button, .no-print {
+    display: none !important;
+  }
+  body {
+    background: white !important;
+    color: black !important;
+  }
+}
