@@ -1,10 +1,24 @@
 import { getSupabaseClient, isSupabaseConfigured } from '../lib/supabase';
-import { Project, BudgetItem, ApreApprovedRecord, AreaTransfer, Area } from '../types/budget';
+import { Project, BudgetItem, ApreApprovedRecord, AreaTransfer, Area, ProjectMilestone, HitoProyecto } from '../types/budget';
 import { INITIAL_PROJECTS } from '../data/mockData';
 import { REAL_APRE_APPROVED_TALCA_2026 } from '../data/realApreApproved2026';
 
 // Map DB row to TypeScript Project
 export function mapRowToProject(row: any, items: BudgetItem[]): Project {
+  let fy = Number(row.fiscal_year);
+  if (isNaN(fy) || fy <= 0) {
+    if (row.code && typeof row.code === 'string') {
+      const match = row.code.match(/TIC-TAL-(\d{4})/i);
+      if (match && match[1]) {
+        fy = parseInt(match[1], 10);
+      } else {
+        fy = 2026;
+      }
+    } else {
+      fy = 2026;
+    }
+  }
+
   return {
     id: row.id,
     code: row.code,
@@ -24,7 +38,14 @@ export function mapRowToProject(row: any, items: BudgetItem[]): Project {
     isExtrapresupuestario: Boolean(row.is_extrapresupuestario),
     pausedInPostCut: Boolean(row.paused_in_post_cut),
     bitacora: [],
-    apreCodigoPres: row.apre_codigo_pres || undefined,
+    fiscalYear: fy,
+    reportedToApre: Boolean(row.reported_to_apre),
+    especificacionesTecnicas: row.especificaciones_tecnicas || undefined,
+    proveedorAdjudicado: row.proveedor_adjudicado || undefined,
+    recepcionOk: Boolean(row.recepcion_ok),
+    enviadoAPago: Boolean(row.enviado_a_pago),
+    destino: row.destino || undefined,
+    unidadFinanciadora: row.unidad_financiadora || undefined,
   };
 }
 
@@ -38,6 +59,10 @@ export function mapRowToItem(row: any): BudgetItem {
     unitPriceCLP: Number(row.unit_price_clp) || 0,
     totalPriceCLP: Number(row.total_price_clp) || 0,
     accountCode: row.account_code || undefined,
+    aprePresCodigo: row.apre_pres_codigo || undefined,
+    apreApprovedCLP: row.apre_approved_clp !== null && row.apre_approved_clp !== undefined ? Number(row.apre_approved_clp) : undefined,
+    montoCotizadoCLP: row.monto_cotizado_clp !== null && row.monto_cotizado_clp !== undefined ? Number(row.monto_cotizado_clp) : undefined,
+    montoEjecutadoFinalCLP: row.monto_ejecutado_final_clp !== null && row.monto_ejecutado_final_clp !== undefined ? Number(row.monto_ejecutado_final_clp) : undefined,
   };
 }
 
@@ -96,13 +121,146 @@ export async function fetchProjectsFromDatabase(): Promise<Project[] | null> {
   }
 }
 
+// Cache of columns detected to be missing in the remote Supabase schema
+const missingColumnsByTable: Map<string, Set<string>> = new Map();
+
+function markColumnAsMissing(table: string, column: string) {
+  let cols = missingColumnsByTable.get(table);
+  if (!cols) {
+    cols = new Set<string>();
+    missingColumnsByTable.set(table, cols);
+  }
+  cols.add(column);
+}
+
+function sanitizePayload(table: string, obj: Record<string, any>): Record<string, any> {
+  const missing = missingColumnsByTable.get(table);
+  if (!missing || missing.size === 0) return { ...obj };
+  const clean: Record<string, any> = {};
+  for (const [key, val] of Object.entries(obj)) {
+    if (!missing.has(key)) {
+      clean[key] = val;
+    }
+  }
+  return clean;
+}
+
+function extractMissingColumn(error: any): string | null {
+  if (!error) return null;
+  const msg = typeof error.message === 'string' ? error.message : '';
+  const match = msg.match(/Could not find the '([^']+)' column/i);
+  if (match && match[1]) {
+    return match[1];
+  }
+  return null;
+}
+
+async function resilientUpdate(
+  supabase: any,
+  table: string,
+  payload: Record<string, any>,
+  matchField: string,
+  matchValue: any,
+  maxRetries = 5
+): Promise<{ error: any }> {
+  let currentPayload = sanitizePayload(table, payload);
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const { error } = await supabase
+      .from(table)
+      .update(currentPayload)
+      .eq(matchField, matchValue);
+
+    if (!error) return { error: null };
+
+    if (error.code === 'PGRST204' || (error.message && error.message.includes('column') && error.message.includes('schema cache'))) {
+      const missingCol = extractMissingColumn(error);
+      if (missingCol && missingCol in currentPayload) {
+        console.warn(`[Supabase Fallback] Columna '${missingCol}' no existe en tabla '${table}'. Omitiendo y reintentando actualización...`);
+        markColumnAsMissing(table, missingCol);
+        delete currentPayload[missingCol];
+        continue;
+      }
+    }
+    return { error };
+  }
+  return { error: new Error(`No se pudo actualizar '${table}' tras varios reintentos.`) };
+}
+
+async function resilientInsert(
+  supabase: any,
+  table: string,
+  payload: Record<string, any> | Record<string, any>[],
+  maxRetries = 5
+): Promise<{ error: any }> {
+  const isArray = Array.isArray(payload);
+  let currentPayload = isArray
+    ? payload.map((row) => sanitizePayload(table, row))
+    : sanitizePayload(table, payload);
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const { error } = await supabase.from(table).insert(currentPayload);
+    if (!error) return { error: null };
+
+    if (error.code === 'PGRST204' || (error.message && error.message.includes('column') && error.message.includes('schema cache'))) {
+      const missingCol = extractMissingColumn(error);
+      if (missingCol) {
+        console.warn(`[Supabase Fallback] Columna '${missingCol}' no existe en tabla '${table}'. Omitiendo y reintentando inserción...`);
+        markColumnAsMissing(table, missingCol);
+        if (Array.isArray(currentPayload)) {
+          currentPayload = currentPayload.map((row) => {
+            const next = { ...row };
+            delete next[missingCol];
+            return next;
+          });
+        } else {
+          delete currentPayload[missingCol];
+        }
+        continue;
+      }
+    }
+    return { error };
+  }
+  return { error: new Error(`No se pudo insertar en '${table}' tras varios reintentos.`) };
+}
+
+async function resilientUpsert(
+  supabase: any,
+  table: string,
+  payload: Record<string, any>[],
+  options: { onConflict: string },
+  maxRetries = 5
+): Promise<{ error: any }> {
+  let currentPayload = payload.map((row) => sanitizePayload(table, row));
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    const { error } = await supabase.from(table).upsert(currentPayload, options);
+    if (!error) return { error: null };
+
+    if (error.code === 'PGRST204' || (error.message && error.message.includes('column') && error.message.includes('schema cache'))) {
+      const missingCol = extractMissingColumn(error);
+      if (missingCol) {
+        console.warn(`[Supabase Fallback] Columna '${missingCol}' no existe en tabla '${table}'. Omitiendo y reintentando upsert...`);
+        markColumnAsMissing(table, missingCol);
+        currentPayload = currentPayload.map((row) => {
+          const next = { ...row };
+          delete next[missingCol];
+          return next;
+        });
+        continue;
+      }
+    }
+    return { error };
+  }
+  return { error: new Error(`No se pudo hacer upsert en '${table}' tras varios reintentos.`) };
+}
+
 export async function insertProjectIntoDatabase(project: Project): Promise<boolean> {
   const supabase = getSupabaseClient();
   if (!supabase) return false;
 
   try {
     // 1. Insert into proyectos
-    const { error: projError } = await supabase.from('proyectos').insert({
+    const { error: projError } = await resilientInsert(supabase, 'proyectos', {
       id: project.id,
       code: project.code,
       title: project.title,
@@ -119,12 +277,19 @@ export async function insertProjectIntoDatabase(project: Project): Promise<boole
       execution_status: project.executionStatus || 'No Iniciado',
       is_extrapresupuestario: project.isExtrapresupuestario || false,
       paused_in_post_cut: project.pausedInPostCut || false,
-      apre_codigo_pres: project.apreCodigoPres || null,
+      fiscal_year: project.fiscalYear || 2026,
+      reported_to_apre: project.reportedToApre || false,
+      especificaciones_tecnicas: project.especificacionesTecnicas || null,
+      proveedor_adjudicado: project.proveedorAdjudicado || null,
+      recepcion_ok: Boolean(project.recepcionOk),
+      enviado_a_pago: Boolean(project.enviadoAPago),
+      destino: project.destino || null,
+      unidad_financiadora: project.unidadFinanciadora || null,
       updated_at: new Date().toISOString(),
     });
 
     if (projError) {
-      console.error('Error inserting project into Supabase:', projError);
+      console.warn('Error inserting project into Supabase:', projError);
       return false;
     }
 
@@ -139,11 +304,15 @@ export async function insertProjectIntoDatabase(project: Project): Promise<boole
         unit_price_clp: it.unitPriceCLP,
         total_price_clp: it.totalPriceCLP,
         account_code: it.accountCode || null,
+        apre_pres_codigo: it.aprePresCodigo || null,
+        apre_approved_clp: it.apreApprovedCLP ?? 0,
+        monto_cotizado_clp: it.montoCotizadoCLP ?? null,
+        monto_ejecutado_final_clp: it.montoEjecutadoFinalCLP ?? null,
       }));
 
-      const { error: itemsError } = await supabase.from('items_gasto').insert(itemRows);
+      const { error: itemsError } = await resilientInsert(supabase, 'items_gasto', itemRows);
       if (itemsError) {
-        console.error('Error inserting items_gasto into Supabase:', itemsError);
+        console.warn('Error inserting items_gasto into Supabase:', itemsError);
       }
     }
 
@@ -160,9 +329,10 @@ export async function updateProjectInDatabase(project: Project): Promise<boolean
 
   try {
     // 1. Update project header
-    const { error: projError } = await supabase
-      .from('proyectos')
-      .update({
+    const { error: projError } = await resilientUpdate(
+      supabase,
+      'proyectos',
+      {
         title: project.title,
         area: project.area,
         responsible: project.responsible,
@@ -176,12 +346,21 @@ export async function updateProjectInDatabase(project: Project): Promise<boolean
         progress_percentage: project.progressPercentage,
         execution_status: project.executionStatus,
         paused_in_post_cut: project.pausedInPostCut || false,
+        reported_to_apre: project.reportedToApre || false,
+        especificaciones_tecnicas: project.especificacionesTecnicas || null,
+        proveedor_adjudicado: project.proveedorAdjudicado || null,
+        recepcion_ok: Boolean(project.recepcionOk),
+        enviado_a_pago: Boolean(project.enviadoAPago),
+        destino: project.destino || null,
+        unidad_financiadora: project.unidadFinanciadora || null,
         updated_at: new Date().toISOString(),
-      })
-      .eq('id', project.id);
+      },
+      'id',
+      project.id
+    );
 
     if (projError) {
-      console.error('Error updating project in Supabase:', projError);
+      console.warn('Error updating project in Supabase:', projError);
       return false;
     }
 
@@ -189,11 +368,13 @@ export async function updateProjectInDatabase(project: Project): Promise<boolean
     const currentItemIds = project.items.map((i) => i.id);
 
     // Delete items not in current list
-    await supabase
-      .from('items_gasto')
-      .delete()
-      .eq('project_id', project.id)
-      .not('id', 'in', `(${currentItemIds.map((id) => `"${id}"`).join(',')})`);
+    if (currentItemIds.length > 0) {
+      await supabase
+        .from('items_gasto')
+        .delete()
+        .eq('project_id', project.id)
+        .not('id', 'in', `(${currentItemIds.map((id) => `"${id}"`).join(',')})`);
+    }
 
     // Upsert items
     if (project.items.length > 0) {
@@ -206,14 +387,21 @@ export async function updateProjectInDatabase(project: Project): Promise<boolean
         unit_price_clp: it.unitPriceCLP,
         total_price_clp: it.totalPriceCLP,
         account_code: it.accountCode || null,
+        apre_pres_codigo: it.aprePresCodigo || null,
+        apre_approved_clp: it.apreApprovedCLP ?? 0,
+        monto_cotizado_clp: it.montoCotizadoCLP ?? null,
+        monto_ejecutado_final_clp: it.montoEjecutadoFinalCLP ?? null,
       }));
 
-      const { error: upsertError } = await supabase
-        .from('items_gasto')
-        .upsert(itemRows, { onConflict: 'id' });
+      const { error: upsertError } = await resilientUpsert(
+        supabase,
+        'items_gasto',
+        itemRows,
+        { onConflict: 'id' }
+      );
 
       if (upsertError) {
-        console.error('Error upserting items into Supabase:', upsertError);
+        console.warn('Warning upserting items into Supabase:', upsertError);
       }
     }
 
@@ -266,15 +454,21 @@ export async function updateItemAccountCodeInDatabase(itemId: string, accountCod
 // 2. APRE PRESUPUESTO APROBADO (Etapa 3)
 // ==========================================
 
-export async function fetchApreRecordsFromDatabase(): Promise<ApreApprovedRecord[] | null> {
+export async function fetchApreRecordsFromDatabase(fiscalYear?: number): Promise<ApreApprovedRecord[] | null> {
   const supabase = getSupabaseClient();
   if (!supabase) return null;
 
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('apre_presupuesto_aprobado')
       .select('*')
       .order('codigo_pres', { ascending: true });
+
+    if (fiscalYear) {
+      query = query.eq('ano', fiscalYear);
+    }
+
+    const { data, error } = await query;
 
     if (error) {
       console.warn('Error fetching APRE records from Supabase:', error.message);
@@ -309,6 +503,8 @@ export async function fetchApreRecordsFromDatabase(): Promise<ApreApprovedRecord
       divisa: r.divisa || 'PESO CHILENO',
       ctaCorriente: r.cta_corriente || '44074221',
       usuarioCre: r.usuario_cre || '',
+      excluded: Boolean(r.excluded),
+      exclusionReason: r.exclusion_reason || undefined,
     }));
   } catch (e) {
     console.warn('Exception fetching APRE records from database:', e);
@@ -321,40 +517,50 @@ export async function saveApreRecordsToDatabase(records: ApreApprovedRecord[]): 
   if (!supabase) return false;
 
   try {
-    const rows = records.map((r) => ({
-      id: `apre-${r.codigoPres}`,
-      codigo_pres: r.codigoPres,
-      distribucion: r.distribucion,
-      ano: r.ano,
-      sucursal: r.sucursal,
-      codigo_tipo_cuenta: r.codigoTipoCuenta,
-      tipo_cuenta: r.tipoCuenta,
-      codigo_centro: r.codigoCentro,
-      centro_costo: r.centroCosto,
-      codigo_grupo_cuenta: r.codigoGrupoCuenta,
-      grupo_cuenta: r.grupoCuenta,
-      codigo_cuenta: r.codigoCuenta,
-      cuenta_contable: r.cuentaContable,
-      codigo_item: r.codigoItem,
-      item_costo: r.itemCosto,
-      detalle: r.detalle,
-      justificacion: r.justificacion,
-      cantidad_desc: r.cantidadDesc,
-      monto_total: r.montoTotal,
-      monto_ejecutado: r.montoEjecutado,
-      saldo: r.saldo,
-      divisa: r.divisa,
-      cta_corriente: r.ctaCorriente,
-      usuario_cre: r.usuarioCre || '',
-      updated_at: new Date().toISOString(),
-    }));
+    const rows = records.map((r) => {
+      // Generamos un ID único basado en el código PRES y el detalle (evita duplicados si cambia el orden)
+      const safeId = `apre-${r.codigoPres}-${Math.abs((r.detalle || '').split('').reduce((acc, char) => (acc << 5) - acc + char.charCodeAt(0), 0))}`;
 
-    const { error } = await supabase
-      .from('apre_presupuesto_aprobado')
-      .upsert(rows, { onConflict: 'id' });
+      return {
+        id: safeId,
+        codigo_pres: r.codigoPres,
+        distribucion: r.distribucion,
+        ano: r.ano,
+        sucursal: r.sucursal,
+        codigo_tipo_cuenta: r.codigoTipoCuenta,
+        tipo_cuenta: r.tipoCuenta,
+        codigo_centro: r.codigoCentro,
+        centro_costo: r.centroCosto,
+        codigo_grupo_cuenta: r.codigoGrupoCuenta,
+        grupo_cuenta: r.grupoCuenta,
+        codigo_cuenta: r.codigoCuenta,
+        cuenta_contable: r.cuentaContable,
+        codigo_item: r.codigoItem,
+        item_costo: r.itemCosto,
+        detalle: r.detalle,
+        justificacion: r.justificacion,
+        cantidad_desc: r.cantidadDesc,
+        monto_total: r.montoTotal,
+        monto_ejecutado: r.montoEjecutado,
+        saldo: r.saldo,
+        divisa: r.divisa,
+        cta_corriente: r.ctaCorriente,
+        usuario_cre: r.usuarioCre || '',
+        excluded: r.excluded || false,
+        exclusion_reason: r.exclusionReason || null,
+        updated_at: new Date().toISOString(),
+      };
+    });
+
+    const { error } = await resilientUpsert(
+      supabase,
+      'apre_presupuesto_aprobado',
+      rows,
+      { onConflict: 'id' }
+    );
 
     if (error) {
-      console.error('Error saving APRE records to Supabase:', error);
+      console.warn('Error saving APRE records to Supabase:', error);
       return false;
     }
 
@@ -374,7 +580,7 @@ export async function saveAreaTransferToDatabase(transfer: AreaTransfer): Promis
   if (!supabase) return false;
 
   try {
-    const { error } = await supabase.from('transferencias_areas').insert({
+    const { error } = await resilientInsert(supabase, 'transferencias_areas', {
       id: transfer.id,
       date: transfer.date,
       account_code: transfer.accountCode,
@@ -386,7 +592,7 @@ export async function saveAreaTransferToDatabase(transfer: AreaTransfer): Promis
     });
 
     if (error) {
-      console.error('Error inserting transfer into Supabase:', error);
+      console.warn('Error inserting transfer into Supabase:', error);
       return false;
     }
     return true;
@@ -476,3 +682,217 @@ export async function seedInitialApreToSupabase(): Promise<void> {
     console.error('Error seeding APRE records to Supabase:', e);
   }
 }
+
+// ==========================================
+// 4. LÍNEA DE TIEMPO DE HITOS (Etapa 5)
+// ==========================================
+
+const HITOS_STORAGE_PREFIX = 'sinapsis_hitos_';
+
+function getLocalHitos(projectId: string): ProjectMilestone[] {
+  try {
+    const raw = localStorage.getItem(`${HITOS_STORAGE_PREFIX}${projectId}`);
+    return raw ? JSON.parse(raw) : [];
+  } catch (e) {
+    return [];
+  }
+}
+
+function saveLocalHitos(projectId: string, hitos: ProjectMilestone[]) {
+  try {
+    localStorage.setItem(`${HITOS_STORAGE_PREFIX}${projectId}`, JSON.stringify(hitos));
+  } catch (e) {
+    // ignore
+  }
+}
+
+export async function fetchHitosForProject(projectId: string): Promise<ProjectMilestone[]> {
+  const local = getLocalHitos(projectId);
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return local;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('hitos_proyecto')
+      .select('*')
+      .eq('project_id', projectId)
+      .order('date', { ascending: true });
+
+    if (error) {
+      console.warn(`[Supabase] No se pudieron cargar hitos de ${projectId}:`, error.message);
+      return local;
+    }
+
+    if (data && data.length > 0) {
+      const mapped: ProjectMilestone[] = data.map((row) => ({
+        id: row.id,
+        projectId: row.project_id,
+        title: row.title,
+        date: row.date,
+        description: row.description || '',
+        completed: Boolean(row.completed),
+      }));
+      saveLocalHitos(projectId, mapped);
+      return mapped;
+    }
+
+    return local;
+  } catch (e) {
+    console.warn('[Supabase] Excepción en fetchHitosForProject:', e);
+    return local;
+  }
+}
+
+export async function insertHito(hito: any): Promise<ProjectMilestone | null> {
+  const projId = hito.projectId || hito.project_id;
+  const newHito: ProjectMilestone = {
+    id: hito.id || (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `hito-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`),
+    projectId: projId,
+    title: hito.title,
+    date: hito.date,
+    description: hito.description || '',
+    completed: Boolean(hito.completed),
+  };
+
+  if (projId) {
+    const local = getLocalHitos(projId);
+    saveLocalHitos(projId, [...local, newHito]);
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) {
+    return newHito;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('hitos_proyecto')
+      .insert([{
+        id: newHito.id.startsWith('hito-') ? undefined : newHito.id,
+        project_id: newHito.projectId,
+        title: newHito.title,
+        date: newHito.date,
+        description: newHito.description || null,
+        completed: newHito.completed,
+      }])
+      .select()
+      .single();
+
+    if (error) {
+      console.warn('[Supabase] Error insertando hito en BD:', error.message);
+      return newHito;
+    }
+
+    if (data) {
+      const persisted: ProjectMilestone = {
+        id: data.id,
+        projectId: data.project_id,
+        title: data.title,
+        date: data.date,
+        description: data.description || '',
+        completed: Boolean(data.completed),
+      };
+      if (projId) {
+        const local = getLocalHitos(projId).filter((h) => h.id !== newHito.id);
+        saveLocalHitos(projId, [...local, persisted]);
+      }
+      return persisted;
+    }
+
+    return newHito;
+  } catch (e) {
+    console.warn('[Supabase] Excepción insertando hito:', e);
+    return newHito;
+  }
+}
+
+export async function updateHito(hito: any): Promise<boolean> {
+  const projId = hito.projectId || hito.project_id;
+  if (projId) {
+    const local = getLocalHitos(projId);
+    saveLocalHitos(
+      projId,
+      local.map((h) =>
+        h.id === hito.id
+          ? {
+              ...h,
+              title: hito.title,
+              date: hito.date,
+              description: hito.description || '',
+              completed: Boolean(hito.completed),
+            }
+          : h
+      )
+    );
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) return true;
+
+  try {
+    const { error } = await supabase
+      .from('hitos_proyecto')
+      .update({
+        title: hito.title,
+        date: hito.date,
+        description: hito.description || null,
+        completed: Boolean(hito.completed),
+      })
+      .eq('id', hito.id);
+
+    if (error) {
+      console.warn('[Supabase] Error actualizando hito:', error.message);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[Supabase] Excepción actualizando hito:', e);
+    return false;
+  }
+}
+
+export async function deleteHito(hitoId: string, projectId?: string): Promise<boolean> {
+  if (projectId) {
+    const local = getLocalHitos(projectId);
+    saveLocalHitos(projectId, local.filter((h) => h.id !== hitoId));
+  } else {
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith(HITOS_STORAGE_PREFIX)) {
+          const raw = localStorage.getItem(key);
+          if (raw) {
+            const list: ProjectMilestone[] = JSON.parse(raw);
+            if (list.some((h) => h.id === hitoId)) {
+              localStorage.setItem(key, JSON.stringify(list.filter((h) => h.id !== hitoId)));
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }
+
+  const supabase = getSupabaseClient();
+  if (!supabase) return true;
+
+  try {
+    const { error } = await supabase
+      .from('hitos_proyecto')
+      .delete()
+      .eq('id', hitoId);
+
+    if (error) {
+      console.warn('[Supabase] Error eliminando hito:', error.message);
+      return false;
+    }
+    return true;
+  } catch (e) {
+    console.warn('[Supabase] Excepción eliminando hito:', e);
+    return false;
+  }
+}
+

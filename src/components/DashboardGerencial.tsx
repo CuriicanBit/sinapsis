@@ -1,6 +1,8 @@
-import React from 'react';
-import { Project, Role, StageId, OFFICIAL_AREAS } from '../types/budget';
-import { formatCLP, OFFICIAL_ACCOUNTS, getAccountByCode } from '../utils/formatters';
+import React, { useMemo, useState } from 'react';
+import { evaluateProjectFinancing, calculateAccountBalances, getActiveApreRecords, getAreaTransfers } from '../utils/apreEngine';
+import { Project, Role, StageId } from '../types/budget';
+import { formatCLP, getAccountByCode } from '../utils/formatters';
+import { useCatalog } from '../CatalogContext';
 import { 
   TrendingUp, 
   AlertTriangle, 
@@ -11,35 +13,42 @@ import {
   Layers, 
   ArrowUpRight, 
   Clock, 
-  Sparkles 
+  Sparkles,
+  GitBranch,
+  X
 } from 'lucide-react';
 
 interface DashboardGerencialProps {
   projects: Project[];
   currentRole: Role;
   onNavigateToStage: (stage: StageId) => void;
+  currentFiscalYear?: number;
 }
 
 export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
   projects,
   currentRole,
   onNavigateToStage,
+  currentFiscalYear = 2026,
 }) => {
-  // Global Aggregations
+  const { areas, cuentas } = useCatalog();
+
+  const apreRecords = getActiveApreRecords(currentFiscalYear);
+  const transfers = getAreaTransfers(currentFiscalYear);
+  const accountBalances = calculateAccountBalances(apreRecords, transfers, projects);
+
   const totalSolicitado = projects.reduce((sum, p) => sum + p.requestedBudgetCLP, 0);
   const totalAprobado = projects.reduce((sum, p) => sum + (p.approvedCeilingCLP ?? p.requestedBudgetCLP), 0);
   const totalEjecutado = projects.reduce((sum, p) => sum + p.executedBudgetCLP, 0);
   const totalDisponible = Math.max(0, totalAprobado - totalEjecutado);
   const executionRate = totalAprobado > 0 ? Math.round((totalEjecutado / totalAprobado) * 100) : 0;
 
-  // Delayed and risk projects
   const atrasados = projects.filter((p) => p.executionStatus === 'Atrasado');
   const enRiesgo = projects.filter((p) => p.executionStatus === 'En Riesgo');
   const completados = projects.filter((p) => p.executionStatus === 'Completado');
   const extrapresupuestarios = projects.filter((p) => p.isExtrapresupuestario);
 
-  // Group by Area TIC
-  const areasList = OFFICIAL_AREAS;
+  const areasList = areas.map((a) => a.name);
   const areaData = areasList.map((area) => {
     const areaProjects = projects.filter((p) => p.area === area);
     const budget = areaProjects.reduce((sum, p) => sum + (p.approvedCeilingCLP ?? p.requestedBudgetCLP), 0);
@@ -56,7 +65,6 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
     };
   }).filter((a) => a.budget > 0);
 
-  // Group by Account
   const allItems = projects.flatMap((p) =>
     p.items.map((it) => ({
       ...it,
@@ -75,11 +83,9 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
   const capexPercent = (capexTotal + opexTotal) > 0 ? Math.round((capexTotal / (capexTotal + opexTotal)) * 100) : 0;
   const opexPercent = 100 - capexPercent;
 
-  // Account execution details
-  const accountsData = OFFICIAL_ACCOUNTS.map((acc) => {
+  const accountsData = cuentas.map((acc) => {
     const accItems = allItems.filter((it) => it.accountCode === acc.code);
     const budget = accItems.reduce((sum, it) => sum + it.totalPriceCLP, 0);
-    // Estimated executed proportional to parent project progress
     const executed = accItems.reduce((sum, it) => {
       const p = it.project;
       const progress = p.progressPercentage / 100;
@@ -95,7 +101,6 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
     };
   }).filter((a) => a.budget > 0);
 
-  // Identify subexecution risk accounts (budget > $5M and execution < 30%)
   const subexecutionRiskAccounts = accountsData.filter((a) => a.budget > 5000000 && a.executionPercent < 30);
 
   return (
@@ -111,7 +116,7 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
               <span>Sede Talca</span>
             </div>
             <h2 className="text-2xl lg:text-3xl font-bold tracking-tight text-white">
-              Tablero de Control Gerencial TIC 2026
+              Tablero de Control Gerencial TIC {currentFiscalYear}
             </h2>
             <p className="text-base text-slate-300 mt-1 max-w-3xl leading-relaxed">
               Consolidación automática derivada del flujo técnico y contable. Muestra el estado integral del presupuesto solicitado, techos aprobados en APRE, ejecución física y alertas tempranas de desviación.
@@ -136,7 +141,6 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
           </div>
         </div>
 
-        {/* 4 Major Master KPIs */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mt-6 pt-6 border-t border-slate-800">
           <div className="p-4 bg-slate-800/80 rounded-lg border border-slate-700">
             <span className="text-xs text-slate-400 font-medium uppercase block">Presupuesto Solicitado</span>
@@ -190,7 +194,6 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
 
       {/* Smart Alerts Center */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Delayed Projects Alert Box */}
         <div className={`p-5 rounded-xl border ${
           atrasados.length > 0 
             ? 'bg-rose-50 border-rose-200 text-rose-950' 
@@ -244,7 +247,6 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
           </div>
         </div>
 
-        {/* Subexecution Risk Alert Box */}
         <div className={`p-5 rounded-xl border ${
           subexecutionRiskAccounts.length > 0 
             ? 'bg-amber-50 border-amber-200 text-amber-950' 
@@ -298,7 +300,6 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
 
       {/* Main Charts & Visual Distributions */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Spending by Area TIC (2/3 width) */}
         <div className="lg:col-span-2 bg-white border border-slate-200 rounded-xl p-6 shadow-xs">
           <div className="flex items-center justify-between mb-4 pb-3 border-b border-slate-100">
             <div className="flex items-center gap-2">
@@ -341,14 +342,11 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
                   </div>
                 </div>
 
-                {/* Comparative Double Bar */}
                 <div className="w-full bg-slate-100 rounded-full h-3 overflow-hidden relative">
-                  {/* Total allocated share relative to max */}
                   <div
                     className="h-3 rounded-full bg-blue-600 transition-all duration-300"
                     style={{ width: `${Math.min(100, (a.budget / totalAprobado) * 100 * 2.5)}%` }}
                   />
-                  {/* Executed fill */}
                   <div
                     className="h-3 rounded-full bg-emerald-500 absolute top-0 left-0 opacity-80"
                     style={{
@@ -378,9 +376,7 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
           </div>
         </div>
 
-        {/* Right Column: CAPEX vs OPEX & Portfolio Breakdown (1/3 width) */}
         <div className="space-y-6">
-          {/* CAPEX vs OPEX Card */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs">
             <div className="flex items-center gap-2 mb-4 pb-3 border-b border-slate-100">
               <PieChart className="w-5 h-5 text-indigo-700" />
@@ -392,18 +388,15 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
               </div>
             </div>
 
-            {/* Visual Ratio Bar */}
             <div className="space-y-3">
               <div className="w-full h-4 rounded-full overflow-hidden flex bg-slate-100">
                 <div
                   className="bg-blue-600 transition-all"
                   style={{ width: `${capexPercent}%` }}
-                  title={`CAPEX: ${capexPercent}%`}
                 />
                 <div
                   className="bg-emerald-600 transition-all"
                   style={{ width: `${opexPercent}%` }}
-                  title={`OPEX: ${opexPercent}%`}
                 />
               </div>
 
@@ -433,7 +426,6 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
             </div>
           </div>
 
-          {/* Project Portfolio Status Summary */}
           <div className="bg-white border border-slate-200 rounded-xl p-6 shadow-xs">
             <h3 className="text-base font-bold text-slate-900 mb-3 pb-2 border-b border-slate-100">
               Estado de la Cartera de Proyectos
@@ -475,6 +467,512 @@ export const DashboardGerencial: React.FC<DashboardGerencialProps> = ({
           </div>
         </div>
       </div>
+
+      {/* ========================================================= */}
+      {/* NUEVA SECCIÓN: TRAZABILIDAD DEL DINERO (SANKY INTERACTIVO) */}
+      {/* ========================================================= */}
+      <SankeyTraceability projects={projects} />
     </div>
+  );
+};
+
+// =========================================================
+// COMPONENTE: SANKEY DE TRAZABILIDAD DEL DINERO
+// =========================================================
+
+type SelectedNodeDetail = {
+  type: 'cuenta' | 'area' | 'proyecto' | 'flow1' | 'flow2';
+  id: string;
+  name: string;
+  code?: string;
+  sourceCode?: string;
+  sourceId?: string;
+  targetId?: string;
+  targetName?: string;
+};
+
+const SankeyTraceability: React.FC<{ projects: Project[] }> = ({ projects }) => {
+  const [hoveredNode, setHoveredNode] = useState<string | null>(null);
+  const [hoveredLink, setHoveredLink] = useState<string | null>(null);
+  const [selectedDetail, setSelectedDetail] = useState<SelectedNodeDetail | null>(null);
+
+  const COLORS = ['#3b82f6', '#8b5cf6', '#ec4899', '#f97316', '#06b6d4', '#14b8a6', '#64748b'];
+  const AREA_COLOR = '#10b981';
+  const PROJ_COLOR = '#f59e0b';
+
+  const sankeyData = useMemo(() => {
+    const cuentaMap = new Map<string, { id: string, name: string, value: number, code: string }>();
+    const areaMap = new Map<string, { id: string, name: string, value: number }>();
+    const projMap = new Map<string, { id: string, name: string, value: number, code: string, shortTitle: string }>();
+    
+    const links1 = new Map<string, { source: string, target: string, value: number }>();
+    const links2 = new Map<string, { source: string, target: string, value: number }>();
+
+    projects.forEach(p => {
+      p.items.forEach(it => {
+        const monto = it.montoEjecutadoFinalCLP || it.montoCotizadoCLP || (it.apreApprovedCLP || 0);
+        if (monto <= 0) return;
+
+        const cuentaCode = it.accountCode || 'Sin Cuenta';
+        const cuentaName = getAccountByCode(cuentaCode)?.name || 'Sin Cuenta';
+        const areaName = p.area;
+        const projCode = p.code;
+        const projTitle = p.title;
+
+        const cId = `c-${cuentaCode}`;
+        const aId = `a-${areaName}`;
+        const pId = `p-${p.id}`;
+
+        if (!cuentaMap.has(cId)) cuentaMap.set(cId, { id: cId, name: cuentaName, value: 0, code: cuentaCode });
+        cuentaMap.get(cId)!.value += monto;
+
+        if (!areaMap.has(aId)) areaMap.set(aId, { id: aId, name: areaName, value: 0 });
+        areaMap.get(aId)!.value += monto;
+
+        if (!projMap.has(pId)) projMap.set(pId, { id: pId, name: projTitle, value: 0, code: projCode, shortTitle: projTitle.substring(0, 30) + (projTitle.length > 30 ? '...' : '') });
+        projMap.get(pId)!.value += monto;
+
+        const l1Id = `${cId}->${aId}`;
+        if (!links1.has(l1Id)) links1.set(l1Id, { source: cId, target: aId, value: 0 });
+        links1.get(l1Id)!.value += monto;
+
+        const l2Id = `${aId}->${pId}`;
+        if (!links2.has(l2Id)) links2.set(l2Id, { source: aId, target: pId, value: 0 });
+        links2.get(l2Id)!.value += monto;
+      });
+    });
+
+    // Función mejorada que guarda los IDs originales para los grupos "Otros"
+    const groupTop = <T extends { id: string, name: string, value: number }>(arr: T[], topN: number, otherName: string): (T & { originalIds?: string[] })[] => {
+      arr.sort((a, b) => b.value - a.value);
+      if (arr.length <= topN) return arr.map(item => ({ ...item, originalIds: [item.id] }));
+      
+      const top = arr.slice(0, topN).map(item => ({ ...item, originalIds: [item.id] }));
+      const rest = arr.slice(topN);
+      const otherValue = rest.reduce((sum, item) => sum + item.value, 0);
+      const otherId = `other-${otherName.replace(/\s/g, '')}`;
+      
+      const otherNode = { 
+        id: otherId, 
+        name: `${otherName} (${rest.length})`, 
+        value: otherValue,
+        originalIds: rest.map(r => r.id)
+      } as T & { originalIds?: string[] };
+      
+      return [...top, otherNode];
+    };
+
+    const topCuentas = groupTop(Array.from(cuentaMap.values()), 6, 'Otras Cuentas');
+    const topAreas = groupTop(Array.from(areaMap.values()), 6, 'Otras Áreas');
+    const topProjs = groupTop(Array.from(projMap.values()), 8, 'Otros Proyectos');
+
+    const mapToTop = (id: string, topList: { id: string }[], otherIdPrefix: string) => {
+      if (topList.some(x => x.id === id)) return id;
+      const otherNode = topList.find(x => x.id.startsWith(`other-${otherIdPrefix}`));
+      return otherNode ? otherNode.id : id;
+    };
+
+    const newLinks1 = new Map<string, { source: string, target: string, value: number }>();
+    links1.forEach(l => {
+      const src = mapToTop(l.source, topCuentas, 'OtrasCuentas');
+      const tgt = mapToTop(l.target, topAreas, 'OtrasÁreas');
+      const key = `${src}->${tgt}`;
+      if (!newLinks1.has(key)) newLinks1.set(key, { source: src, target: tgt, value: 0 });
+      newLinks1.get(key)!.value += l.value;
+    });
+
+    const newLinks2 = new Map<string, { source: string, target: string, value: number }>();
+    links2.forEach(l => {
+      const src = mapToTop(l.source, topAreas, 'OtrasÁreas');
+      const tgt = mapToTop(l.target, topProjs, 'OtrosProyectos');
+      const key = `${src}->${tgt}`;
+      if (!newLinks2.has(key)) newLinks2.set(key, { source: src, target: tgt, value: 0 });
+      newLinks2.get(key)!.value += l.value;
+    });
+
+    return {
+      cuentas: topCuentas,
+      areas: topAreas,
+      projs: topProjs,
+      links1: Array.from(newLinks1.values()),
+      links2: Array.from(newLinks2.values()),
+      total: topCuentas.reduce((s, c) => s + c.value, 0)
+    };
+  }, [projects]);
+
+  const layout = useMemo(() => {
+    const { cuentas, areas, projs, links1, links2, total } = sankeyData;
+    if (total === 0) return null;
+
+    const width = 1600; 
+    const height = 1000;
+    const paddingY = 24;
+    const colWidth = 160;
+    
+    const col1X = 250; 
+    const col2X = 720; 
+    const col3X = 1200; 
+
+    const positionNodes = (nodes: any[], xPos: number, colorFn?: (n: any, i: number) => string) => {
+      const totalPadding = paddingY * (nodes.length - 1);
+      const availableH = height - totalPadding - 120;
+      let currentY = 60;
+      
+      return nodes.map((n, i) => {
+        const h = (n.value / total) * availableH;
+        const node = { 
+          ...n, 
+          x: xPos, 
+          y: currentY, 
+          h: Math.max(h, 6), 
+          w: colWidth, 
+          offsetOut: 0, 
+          offsetIn: 0,
+          color: colorFn ? colorFn(n, i) : undefined
+        };
+        currentY += h + paddingY;
+        return node;
+      });
+    };
+
+    const posCuentas = positionNodes(cuentas, col1X, (n, i) => n.id.startsWith('other') ? '#64748b' : COLORS[i % COLORS.length]);
+    const posAreas = positionNodes(areas, col2X, () => AREA_COLOR);
+    const posProjs = positionNodes(projs, col3X, () => PROJ_COLOR);
+
+    const calcLinks = (links: any[], sourceNodes: any[], targetNodes: any[]) => {
+      sourceNodes.forEach(n => n.offsetOut = 0);
+      targetNodes.forEach(n => n.offsetIn = 0);
+
+      return links.map(l => {
+        const src = sourceNodes.find(n => n.id === l.source);
+        const tgt = targetNodes.find(n => n.id === l.target);
+        if (!src || !tgt) return null;
+
+        const sourceH = (l.value / src.value) * src.h;
+        const targetH = (l.value / tgt.value) * tgt.h;
+
+        const sourceY = src.y + src.offsetOut + sourceH / 2;
+        const targetY = tgt.y + tgt.offsetIn + targetH / 2;
+        
+        src.offsetOut += sourceH;
+        tgt.offsetIn += targetH;
+
+        return {
+          ...l,
+          sourceX: src.x + src.w,
+          sourceY,
+          targetX: tgt.x,
+          targetY,
+          sourceH,
+          targetH,
+          sourceName: src.name,
+          targetName: tgt.name,
+          color: src.color || '#3b82f6'
+        };
+      }).filter(Boolean);
+    };
+
+    const posLinks1 = calcLinks(links1, posCuentas, posAreas);
+    const posLinks2 = calcLinks(links2, posAreas, posProjs);
+
+    return { posCuentas, posAreas, posProjs, posLinks1, posLinks2, total, width, height };
+  }, [sankeyData, COLORS, AREA_COLOR, PROJ_COLOR]);
+
+  // Lógica para calcular los detalles del modal según el nodo O FLUJO seleccionado
+  const modalData = useMemo(() => {
+    if (!selectedDetail) return null;
+
+    const itemsWithMonto = projects.flatMap(p => 
+      p.items.map(it => ({
+        ...it,
+        project: p,
+        montoUtilizado: it.montoEjecutadoFinalCLP || it.montoCotizadoCLP || (it.apreApprovedCLP || 0)
+      }))
+    ).filter(it => it.montoUtilizado > 0);
+
+    let filteredItems = [];
+    
+    if (selectedDetail.type === 'cuenta') {
+      filteredItems = itemsWithMonto.filter(it => it.accountCode === selectedDetail.code);
+    } else if (selectedDetail.type === 'area') {
+      filteredItems = itemsWithMonto.filter(it => it.project.area === selectedDetail.name);
+    } else if (selectedDetail.type === 'proyecto') {
+      const projId = selectedDetail.id.replace('p-', '');
+      filteredItems = itemsWithMonto.filter(it => it.project.id === projId);
+    } else if (selectedDetail.type === 'flow1') {
+      // Flujo: Cuenta -> Área
+      const targetNode = sankeyData.areas.find(a => a.id === selectedDetail.targetId);
+      const targetIds = targetNode?.originalIds || [];
+      filteredItems = itemsWithMonto.filter(it => 
+        it.accountCode === selectedDetail.sourceCode && 
+        targetIds.includes(`a-${it.project.area}`)
+      );
+    } else if (selectedDetail.type === 'flow2') {
+      // Flujo: Área -> Proyecto
+      const sourceNode = sankeyData.areas.find(a => a.id === selectedDetail.sourceId);
+      const sourceIds = sourceNode?.originalIds || [];
+      const targetNode = sankeyData.projs.find(p => p.id === selectedDetail.targetId);
+      const targetIds = targetNode?.originalIds || [];
+      
+      filteredItems = itemsWithMonto.filter(it => 
+        sourceIds.includes(`a-${it.project.area}`) && 
+        targetIds.includes(`p-${it.project.id}`)
+      );
+    }
+
+    const total = filteredItems.reduce((s, it) => s + it.montoUtilizado, 0);
+    return { items: filteredItems.sort((a, b) => b.montoUtilizado - a.montoUtilizado), total };
+  }, [selectedDetail, projects, sankeyData]);
+
+
+  if (!layout) {
+    return (
+      <div className="bg-white border border-slate-200 rounded-xl p-8 text-center shadow-xs">
+        <GitBranch className="w-12 h-12 text-slate-300 mx-auto mb-3" />
+        <h3 className="text-lg font-bold text-slate-800">Sin flujo de dinero registrado</h3>
+        <p className="text-sm text-slate-500 mt-1">Aún no hay ejecuciones ni compromisos que trazar para este año fiscal.</p>
+      </div>
+    );
+  }
+
+  const { posCuentas, posAreas, posProjs, posLinks1, posLinks2, total, width, height } = layout;
+
+  const getLinkOpacity = (l: any, type: 'l1' | 'l2') => {
+    if (hoveredLink === `${type}-${l.source}-${l.target}`) return 0.9;
+    if (hoveredNode) {
+      if (l.source === hoveredNode || l.target === hoveredNode) return 0.6;
+      return 0.1;
+    }
+    return 0.3;
+  };
+
+  return (
+    <>
+      <div className="bg-white border border-slate-200 rounded-xl p-4 md:p-6 shadow-xs mt-6 overflow-hidden">
+        <div className="flex flex-col md:flex-row md:items-center justify-between mb-6 pb-4 border-b border-slate-100 gap-4">
+          <div>
+            <div className="flex items-center gap-2">
+              <div className="p-1.5 bg-indigo-50 rounded-lg">
+                <GitBranch className="w-5 h-5 text-indigo-600" />
+              </div>
+              <h3 className="text-lg font-bold text-slate-900">
+                Trazabilidad del Dinero (Flujo Ejecutado y Comprometido)
+              </h3>
+            </div>
+            <p className="text-sm text-slate-500 mt-1 ml-9 flex items-center gap-2">
+              Visualización Sankey: Cuentas &rarr; Áreas &rarr; Proyectos
+              <span className="text-xs bg-amber-100 text-amber-800 px-2 py-0.5 rounded font-semibold border border-amber-200">
+                💡 Haz clic en un nodo o en una línea para ver el desglose
+              </span>
+            </p>
+          </div>
+          <div className="flex items-center gap-4 text-xs font-medium bg-slate-50 px-3 py-1.5 rounded-lg border border-slate-200 shrink-0">
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-blue-500"></span> Cuentas</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-emerald-500"></span> Áreas</span>
+            <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded bg-amber-500"></span> Proyectos</span>
+          </div>
+        </div>
+
+        <div className="relative w-full overflow-x-auto bg-slate-900 rounded-xl p-2 md:p-4">
+          <svg viewBox={`0 0 ${width} ${height}`} className="w-full h-auto" style={{ fontFamily: 'Inter, sans-serif' }}>
+            
+            {/* Links Nivel 1 (Cuentas -> Áreas) */}
+            {posLinks1.map((l, i) => (
+              <path 
+                key={`l1-${i}`} 
+                d={`M ${l.sourceX} ${l.sourceY} C ${l.sourceX + (l.targetX - l.sourceX) / 2} ${l.sourceY}, ${l.targetX - (l.targetX - l.sourceX) / 2} ${l.targetY}, ${l.targetX} ${l.targetY}`} 
+                fill="none" 
+                stroke={l.color} 
+                strokeWidth={Math.max(2, l.sourceH)} 
+                strokeOpacity={getLinkOpacity(l, 'l1')} 
+                onMouseEnter={() => setHoveredLink(`l1-${l.source}-${l.target}`)} 
+                onMouseLeave={() => setHoveredLink(null)} 
+                onClick={() => setSelectedDetail({ 
+                  type: 'flow1', 
+                  id: 'flow1', 
+                  name: `Flujo: ${l.sourceName} → ${l.targetName}`, 
+                  sourceCode: l.source.replace('c-', ''), 
+                  targetId: l.target 
+                })}
+                className="transition-all duration-200 cursor-pointer hover:stroke-opacity-100"
+              >
+                <title>{`${l.sourceName} → ${l.targetName}: ${formatCLP(l.value)}\nClick para ver el desglose`}</title>
+              </path>
+            ))}
+
+            {/* Links Nivel 2 (Áreas -> Proyectos) */}
+            {posLinks2.map((l, i) => (
+              <path 
+                key={`l2-${i}`} 
+                d={`M ${l.sourceX} ${l.sourceY} C ${l.sourceX + (l.targetX - l.sourceX) / 2} ${l.sourceY}, ${l.targetX - (l.targetX - l.sourceX) / 2} ${l.targetY}, ${l.targetX} ${l.targetY}`} 
+                fill="none" 
+                stroke={PROJ_COLOR} 
+                strokeWidth={Math.max(2, l.sourceH)} 
+                strokeOpacity={getLinkOpacity(l, 'l2')} 
+                onMouseEnter={() => setHoveredLink(`l2-${l.source}-${l.target}`)} 
+                onMouseLeave={() => setHoveredLink(null)} 
+                onClick={() => setSelectedDetail({ 
+                  type: 'flow2', 
+                  id: 'flow2', 
+                  name: `Flujo: ${l.sourceName} → ${l.targetName}`, 
+                  sourceId: l.source, 
+                  targetId: l.target 
+                })}
+                className="transition-all duration-200 cursor-pointer hover:stroke-opacity-100"
+              >
+                <title>{`${l.sourceName} → ${l.targetName}: ${formatCLP(l.value)}\nClick para ver el desglose`}</title>
+              </path>
+            ))}
+
+            {/* Nodos: Cuentas */}
+            {posCuentas.map((n) => (
+              <g key={n.id} onMouseEnter={() => setHoveredNode(n.id)} onMouseLeave={() => setHoveredNode(null)} onClick={() => setSelectedDetail({ type: 'cuenta', id: n.id, name: n.name, code: n.code })} className="cursor-pointer">
+                <rect x={n.x} y={n.y} width={n.w} height={n.h} fill={n.color} rx={4} className={`transition-all duration-200 ${hoveredNode === n.id ? 'stroke-white stroke-2 shadow-lg' : ''}`}>
+                  <title>{`${n.code} · ${n.name}: ${formatCLP(n.value)}\nClick para ver detalles`}</title>
+                </rect>
+                <text x={n.x - 12} y={n.y + n.h / 2 - 8} textAnchor="end" dominantBaseline="middle" fill="#ffffff" fontSize={15} fontWeight="bold" className="pointer-events-none drop-shadow-md">{n.code}</text>
+                <text x={n.x - 12} y={n.y + n.h / 2 + 10} textAnchor="end" dominantBaseline="middle" fill="#94a3b8" fontSize={13} className="pointer-events-none">{n.name.length > 25 ? n.name.substring(0, 25) + '...' : n.name}</text>
+              </g>
+            ))}
+
+            {/* Nodos: Áreas */}
+            {posAreas.map((n) => (
+              <g key={n.id} onMouseEnter={() => setHoveredNode(n.id)} onMouseLeave={() => setHoveredNode(null)} onClick={() => setSelectedDetail({ type: 'area', id: n.id, name: n.name })} className="cursor-pointer">
+                <rect x={n.x} y={n.y} width={n.w} height={n.h} fill={n.color} rx={4} className={`transition-all duration-200 ${hoveredNode === n.id ? 'stroke-white stroke-2 shadow-lg' : ''}`}>
+                  <title>{`${n.name}: ${formatCLP(n.value)}\nClick para ver detalles`}</title>
+                </rect>
+                <text x={n.x + n.w / 2} y={n.y - 12} textAnchor="middle" dominantBaseline="middle" fill="#e2e8f0" fontSize={14} fontWeight="bold" className="pointer-events-none drop-shadow-md">{n.name}</text>
+              </g>
+            ))}
+
+            {/* Nodos: Proyectos */}
+            {posProjs.map((n) => (
+              <g key={n.id} onMouseEnter={() => setHoveredNode(n.id)} onMouseLeave={() => setHoveredNode(null)} onClick={() => setSelectedDetail({ type: 'proyecto', id: n.id, name: n.name, code: n.code })} className="cursor-pointer">
+                <rect x={n.x} y={n.y} width={n.w} height={n.h} fill={n.color} rx={4} className={`transition-all duration-200 ${hoveredNode === n.id ? 'stroke-white stroke-2 shadow-lg' : ''}`}>
+                  <title>{`${n.name}: ${formatCLP(n.value)}\nClick para ver detalles`}</title>
+                </rect>
+                <text x={n.x + n.w + 12} y={n.y + n.h / 2 - 8} textAnchor="start" dominantBaseline="middle" fill="#ffffff" fontSize={14} fontWeight="bold" className="pointer-events-none drop-shadow-md">{n.code}</text>
+                <text x={n.x + n.w + 12} y={n.y + n.h / 2 + 10} textAnchor="start" dominantBaseline="middle" fill="#94a3b8" fontSize={12} className="pointer-events-none">{n.shortTitle || n.name}</text>
+              </g>
+            ))}
+          </svg>
+        </div>
+        
+        <div className="mt-4 flex items-center justify-between text-xs text-slate-500">
+          <p>El grosor de cada flujo representa el monto utilizado. Pasa el mouse para ver el resumen.</p>
+          <p className="font-semibold text-slate-700">Total Trazado: {formatCLP(total)}</p>
+        </div>
+      </div>
+
+      {/* ========================================================= */}
+      {/* MODAL DE DETALLE (DRILL-DOWN) */}
+      {/* ========================================================= */}
+      {selectedDetail && modalData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-in fade-in duration-200" onClick={() => setSelectedDetail(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex flex-col animate-in zoom-in-95 duration-200" onClick={(e) => e.stopPropagation()}>
+            
+            {/* Header del Modal */}
+            <div className="p-6 border-b border-slate-200 bg-slate-50 flex items-start justify-between shrink-0">
+              <div>
+                <div className="flex items-center gap-3 mb-2">
+                  <span className={`px-2.5 py-1 rounded-md text-xs font-bold uppercase tracking-wider ${
+                    selectedDetail.type === 'cuenta' ? 'bg-blue-100 text-blue-800' :
+                    selectedDetail.type === 'area' ? 'bg-emerald-100 text-emerald-800' :
+                    selectedDetail.type === 'proyecto' ? 'bg-amber-100 text-amber-800' :
+                    'bg-indigo-100 text-indigo-800'
+                  }`}>
+                    {selectedDetail.type === 'flow1' || selectedDetail.type === 'flow2' 
+                      ? 'Detalle de Flujo Específico' 
+                      : `Detalle de ${selectedDetail.type}`}
+                  </span>
+                  <span className="text-slate-400">·</span>
+                  <span className="text-sm font-semibold text-slate-500">
+                    {modalData.items.length} ítems encontrados
+                  </span>
+                </div>
+                <h3 className="text-2xl font-bold text-slate-900">
+                  {selectedDetail.code ? `${selectedDetail.code} · ` : ''}{selectedDetail.name}
+                </h3>
+                <p className="text-lg font-bold text-indigo-600 mt-1 font-tabular">
+                  Total Utilizado: {formatCLP(modalData.total)}
+                </p>
+              </div>
+              <button onClick={() => setSelectedDetail(null)} className="p-2 text-slate-400 hover:text-slate-700 hover:bg-slate-200 rounded-lg transition-colors">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Cuerpo del Modal (Tabla) */}
+            <div className="p-0 overflow-y-auto flex-1 bg-white">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-50 sticky top-0 z-10 shadow-sm">
+                  <tr>
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">Descripción del Ítem</th>
+                    
+                    {/* Mostrar columna Proyecto si NO es un flujo directo a un proyecto único */}
+                    {selectedDetail.type !== 'proyecto' && selectedDetail.type !== 'flow2' && (
+                      <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">Proyecto / Área</th>
+                    )}
+                    
+                    {/* Mostrar columna Cuenta si NO es un flujo que viene de una cuenta única */}
+                    {selectedDetail.type !== 'cuenta' && selectedDetail.type !== 'flow1' && (
+                      <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200">Cuenta</th>
+                    )}
+                    
+                    <th className="px-6 py-4 text-xs font-bold text-slate-500 uppercase tracking-wider border-b border-slate-200 text-right">Monto Utilizado</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {modalData.items.map((it, idx) => (
+                    <tr key={idx} className="hover:bg-slate-50 transition-colors">
+                      <td className="px-6 py-4">
+                        <p className="text-sm font-bold text-slate-900">{it.description}</p>
+                        {it.justification && <p className="text-xs text-slate-500 mt-1 line-clamp-1">{it.justification}</p>}
+                      </td>
+                      
+                      {selectedDetail.type !== 'proyecto' && selectedDetail.type !== 'flow2' && (
+                        <td className="px-6 py-4">
+                          <p className="text-sm font-semibold text-slate-800">{it.project.code}</p>
+                          <p className="text-xs text-slate-500">{it.project.title}</p>
+                          <p className="text-xs font-medium text-blue-600 mt-1">{it.project.area}</p>
+                        </td>
+                      )}
+                      
+                      {selectedDetail.type !== 'cuenta' && selectedDetail.type !== 'flow1' && (
+                        <td className="px-6 py-4">
+                          <p className="text-sm font-mono text-slate-800">{it.accountCode || 'S/C'}</p>
+                          <p className="text-xs text-slate-500">{getAccountByCode(it.accountCode)?.name || 'Sin cuenta'}</p>
+                        </td>
+                      )}
+                      
+                      <td className="px-6 py-4 text-right">
+                        <p className="text-sm font-bold text-slate-900 font-tabular">{formatCLP(it.montoUtilizado)}</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          {it.montoEjecutadoFinalCLP ? 'Ejecutado Final' : it.montoCotizadoCLP ? 'Cotizado' : 'Aprobado APRE'}
+                        </p>
+                      </td>
+                    </tr>
+                  ))}
+                  {modalData.items.length === 0 && (
+                    <tr>
+                      <td colSpan={4} className="px-6 py-12 text-center text-slate-500">
+                        No hay ítems individuales para mostrar en esta agrupación (corresponde al grupo "Otros").
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+            
+            {/* Footer del Modal */}
+            <div className="p-4 border-t border-slate-200 bg-slate-50 flex justify-end shrink-0">
+              <button onClick={() => setSelectedDetail(null)} className="px-5 py-2 bg-slate-200 hover:bg-slate-300 text-slate-800 text-sm font-bold rounded-lg transition-colors">
+                Cerrar Detalle
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 };

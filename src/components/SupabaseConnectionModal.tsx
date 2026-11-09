@@ -4,7 +4,8 @@ import {
   saveSupabaseCredentials, 
   clearSupabaseCredentials, 
   isSupabaseConfigured,
-  SUPABASE_SQL_SCHEMA 
+  SUPABASE_SQL_SCHEMA,
+  SUPABASE_MIGRATION_SQL
 } from '../lib/supabase';
 import { 
   seedInitialProjectsToSupabase, 
@@ -20,7 +21,8 @@ import {
   Trash2, 
   ExternalLink,
   ShieldCheck,
-  Server
+  Server,
+  FileCode
 } from 'lucide-react';
 
 interface SupabaseConnectionModalProps {
@@ -38,6 +40,7 @@ export const SupabaseConnectionModal: React.FC<SupabaseConnectionModalProps> = (
   const [url, setUrl] = useState(currentCreds.url);
   const [anonKey, setAnonKey] = useState(currentCreds.anonKey);
   const [copiedSql, setCopiedSql] = useState(false);
+  const [copiedMigration, setCopiedMigration] = useState(false);
   const [isTesting, setIsTesting] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -75,6 +78,12 @@ export const SupabaseConnectionModal: React.FC<SupabaseConnectionModalProps> = (
     navigator.clipboard.writeText(SUPABASE_SQL_SCHEMA);
     setCopiedSql(true);
     setTimeout(() => setCopiedSql(false), 3000);
+  };
+
+  const handleCopyMigration = () => {
+    navigator.clipboard.writeText(SUPABASE_MIGRATION_SQL);
+    setCopiedMigration(true);
+    setTimeout(() => setCopiedMigration(false), 3000);
   };
 
   const handleSeedData = async () => {
@@ -211,35 +220,61 @@ export const SupabaseConnectionModal: React.FC<SupabaseConnectionModalProps> = (
           </form>
 
           {/* SQL Setup Helper */}
-          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-3">
-            <div className="flex items-center justify-between">
+          <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h4 className="text-sm font-bold text-slate-900 flex items-center gap-1.5">
                   <Server className="w-4 h-4 text-blue-700" />
-                  <span>Script SQL para crear las tablas en Supabase</span>
+                  <span>Scripts SQL para Supabase (SQL Editor)</span>
                 </h4>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  Ejecute este script una sola vez en el <strong>SQL Editor</strong> de su panel de Supabase.
+                  Ejecute en el <strong>SQL Editor</strong> de Supabase para crear o migrar columnas sin perder datos.
                 </p>
               </div>
 
-              <button
-                type="button"
-                onClick={handleCopySql}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
-              >
-                {copiedSql ? (
-                  <>
-                    <Check className="w-3.5 h-3.5 text-emerald-600" />
-                    <span className="text-emerald-700">¡Copiado!</span>
-                  </>
-                ) : (
-                  <>
-                    <Copy className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Copiar Script SQL</span>
-                  </>
-                )}
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={handleCopyMigration}
+                  title="Añade approved_ceiling_clp, fiscal_year, etc. a tablas existentes"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                >
+                  {copiedMigration ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">¡Migración Copiada!</span>
+                    </>
+                  ) : (
+                    <>
+                      <FileCode className="w-3.5 h-3.5 text-amber-700" />
+                      <span>Copiar Migración (ALTER TABLE)</span>
+                    </>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleCopySql}
+                  title="Crea todas las tablas desde cero"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold transition-colors cursor-pointer shadow-2xs"
+                >
+                  {copiedSql ? (
+                    <>
+                      <Check className="w-3.5 h-3.5 text-emerald-600" />
+                      <span className="text-emerald-700">¡Copiado!</span>
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Script Completo</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            <div className="p-2.5 bg-blue-50/70 border border-blue-200/80 rounded-lg text-xs text-blue-900 leading-relaxed">
+              💡 <strong>Compatibilidad Inteligente:</strong> La aplicación omite automáticamente y reintenta de forma transparente cualquier columna que aún no haya sido agregada en su base de datos Supabase (ej. <code>approved_ceiling_clp</code> o <code>fiscal_year</code>), garantizando sincronización sin bloqueos ni errores en pantalla.
             </div>
 
             {isConfigured && (

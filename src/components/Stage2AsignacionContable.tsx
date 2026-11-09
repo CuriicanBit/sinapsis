@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Project, Role, Area, OFFICIAL_AREAS } from '../types/budget';
-import { formatCLP, OFFICIAL_ACCOUNTS, getAccountByCode, downloadApreExportCSV, AREA_CONFIG } from '../utils/formatters';
+import { formatCLP, getAccountByCode, downloadApreExportCSV, AREA_CONFIG } from '../utils/formatters';
+import { useCatalog } from '../CatalogContext';
 import { 
   deduceAccountForItem, 
   saveLearnedPattern, 
@@ -29,6 +30,7 @@ interface Stage2AsignacionContableProps {
   onUpdateProject: (project: Project) => void;
   currentRole: Role;
   onGoToNextStage: () => void;
+  currentFiscalYear?: number;
 }
 
 export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> = ({
@@ -36,7 +38,9 @@ export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> =
   onUpdateProject,
   currentRole,
   onGoToNextStage,
+  currentFiscalYear = 2026,
 }) => {
+  const { cuentas } = useCatalog();
   // 1. Filter: Validated Projects from Stage 1 (default: ONLY validated)
   const [showValidatedOnly, setShowValidatedOnly] = useState<boolean>(true);
   const [filterAccountStatus, setFilterAccountStatus] = useState<'all' | 'pending' | 'assigned'>('all');
@@ -188,7 +192,7 @@ export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> =
   });
 
   // Calculate totals by official account
-  const accountTotals = OFFICIAL_ACCOUNTS.map((acc) => {
+  const accountTotals = cuentas.map((acc) => {
     const itemsInAccount = allItemsWithProject.filter((it) => it.accountCode === acc.code);
     const amount = itemsInAccount.reduce((sum, it) => sum + it.totalPriceCLP, 0);
     return {
@@ -279,8 +283,8 @@ export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> =
             {/* Export CSV for APRE */}
             <button
               onClick={() => {
-                downloadApreExportCSV(projects, `PRESUPUESTO_CARGA_APRE_2026_${new Date().toISOString().slice(0, 10)}.csv`);
-                setLearningNotification('Archivo CSV para plataforma APRE descargado exitosamente con 27 columnas corporativas.');
+                downloadApreExportCSV(projects, currentFiscalYear, `PRESUPUESTO_CARGA_APRE_${currentFiscalYear}_${new Date().toISOString().slice(0, 10)}.csv`);
+                setLearningNotification(`Archivo CSV para plataforma APRE ${currentFiscalYear} descargado exitosamente con 27 columnas corporativas.`);
                 setTimeout(() => setLearningNotification(null), 4500);
               }}
               className="flex items-center gap-2 bg-[#000000] hover:bg-[#222222] text-white font-bold px-4 py-2.5 rounded-lg shadow-sm transition-colors text-sm cursor-pointer border border-[#333333]"
@@ -547,7 +551,19 @@ export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> =
       <div className="grid grid-cols-1 xl:grid-cols-3 gap-6">
         {/* Left 2 Columns: Items Grid (Wide and Clear for Paola) */}
         <div className="xl:col-span-2 space-y-4">
-          {filteredItems.length === 0 ? (
+          {projects.length === 0 ? (
+            <div className="bg-white border-2 border-dashed border-slate-300 rounded-2xl p-12 text-center shadow-xs">
+              <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-slate-100 flex items-center justify-center text-slate-500">
+                <Layers className="w-8 h-8" />
+              </div>
+              <h3 className="text-xl font-bold text-slate-900 mb-2">
+                Aún no hay proyectos formulados para el ejercicio {currentFiscalYear}
+              </h3>
+              <p className="text-base text-slate-600 mb-4 max-w-md mx-auto">
+                Debe formular proyectos en la Etapa 1 para poder asociar sus cuentas contables institucionales.
+              </p>
+            </div>
+          ) : filteredItems.length === 0 ? (
             <div className="bg-white border border-slate-200 rounded-xl p-12 text-center">
               <p className="text-lg font-medium text-slate-700">No se encontraron ítems con los filtros seleccionados.</p>
               <p className="text-xs text-slate-500 mt-1">Verifique si tiene activo el filtro de solo proyectos validados o cambie de área.</p>
@@ -618,7 +634,7 @@ export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> =
                             <option value="" disabled>
                               Asignar cuenta a todo el proyecto...
                             </option>
-                            {OFFICIAL_ACCOUNTS.map((acc) => (
+                            {cuentas.map((acc) => (
                               <option key={acc.code} value={acc.code}>
                                 {acc.code} - {acc.name} ({acc.categoryLabel || (acc.type === 'Activo' ? 'Inversión' : 'Operación')})
                               </option>
@@ -712,7 +728,7 @@ export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> =
                                     }`}
                                   >
                                     <option value="">-- Seleccionar Cuenta Contable --</option>
-                                    {OFFICIAL_ACCOUNTS.map((acc) => (
+                                    {cuentas.map((acc) => (
                                       <option key={acc.code} value={acc.code}>
                                         {acc.code} - {acc.name} ({acc.categoryLabel || (acc.type === 'Activo' ? 'Inversión' : 'Operación')})
                                       </option>
@@ -850,7 +866,7 @@ export const Stage2AsignacionContable: React.FC<Stage2AsignacionContableProps> =
                               }`}
                             >
                               <option value="">-- Seleccionar Cuenta Contable --</option>
-                              {OFFICIAL_ACCOUNTS.map((acc) => (
+                              {cuentas.map((acc) => (
                                 <option key={acc.code} value={acc.code}>
                                   {acc.code} - {acc.name} ({acc.categoryLabel || (acc.type === 'Activo' ? 'Inversión' : 'Operación')})
                                 </option>

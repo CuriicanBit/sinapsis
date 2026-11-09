@@ -9,7 +9,8 @@ import {
   BarChart3, 
   RotateCcw,
   UserCheck,
-  Database
+  Database,
+  CalendarRange
 } from 'lucide-react';
 
 interface HeaderProps {
@@ -17,6 +18,8 @@ interface HeaderProps {
   onRoleChange: (role: Role) => void;
   currentStage: StageId;
   onStageChange: (stage: StageId) => void;
+  currentFiscalYear: number;
+  onFiscalYearChange: (year: number) => void;
   onResetData: () => void;
   isSupabaseActive?: boolean;
   onOpenSupabaseModal?: () => void;
@@ -27,6 +30,8 @@ export const Header: React.FC<HeaderProps> = ({
   onRoleChange,
   currentStage,
   onStageChange,
+  currentFiscalYear,
+  onFiscalYearChange,
   onResetData,
   isSupabaseActive = false,
   onOpenSupabaseModal,
@@ -55,17 +60,116 @@ export const Header: React.FC<HeaderProps> = ({
             UA
           </div>
           <div>
-            <h1 className="text-lg font-bold text-white tracking-tight leading-tight">
-              Sistema de Presupuesto y Proyectos - Soporte TIC (Sede Talca)
-            </h1>
-            <p className="text-xs text-[#d2d2d2] font-medium">
-              Universidad Autónoma de Chile · Sede Talca · Planificación y Ejecución Presupuestaria 2026
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-extrabold text-white tracking-tight leading-tight">
+                SINAPSIS TIC <span className="text-[#ff6900]">·</span> Sede Talca
+              </h1>
+              <span className="hidden md:inline-block text-[11px] font-semibold text-slate-300 bg-white/10 px-2 py-0.5 rounded border border-white/10">
+                Sistema Inteligente de Negociación y Asignación Presupuestaria
+              </span>
+            </div>
+            <p className="text-xs text-[#d2d2d2] font-medium flex items-center gap-1.5 flex-wrap mt-0.5">
+              <span>Universidad Autónoma de Chile</span>
+              <span>·</span>
+              {currentFiscalYear === 2026 && (
+                <span className="text-[#da291c] font-bold bg-[#da291c]/10 px-1.5 py-0.5 rounded border border-[#da291c]/30">
+                  ⚡ Ejercicio Activo 2026 (En Ejecución)
+                </span>
+              )}
+              {currentFiscalYear === 2027 && (
+                <span className="text-[#ff6900] font-bold bg-[#ff6900]/10 px-1.5 py-0.5 rounded border border-[#ff6900]/30">
+                  📝 Planificación Futura 2027 (En Formulación)
+                </span>
+              )}
+              {currentFiscalYear <= 2025 && (
+                <span className="text-amber-300 font-bold bg-amber-500/10 px-1.5 py-0.5 rounded border border-amber-500/30">
+                  🏛️ Archivo Histórico {currentFiscalYear} (Cerrado)
+                </span>
+              )}
             </p>
           </div>
         </div>
 
-        {/* Role Selector & Quick Actions */}
-        <div className="flex items-center gap-3">
+        {/* Global Controls: Fiscal Year Switcher & Role Selector */}
+        <div className="flex flex-wrap items-center gap-2.5">
+          {/* 1. BARRA SUPERIOR DE CICLOS PRESUPUESTARIOS */}
+          <div className="flex items-center bg-[#151515] p-1 rounded-lg border border-[#333333] shadow-inner">
+            <span className="text-xs font-semibold text-[#d2d2d2] px-2.5 flex items-center gap-1.5 border-r border-[#333333] mr-1">
+              <CalendarRange className="w-3.5 h-3.5 text-[#ff6900]" />
+              <span className="hidden sm:inline">Ejercicio:</span>
+            </span>
+
+            {/* [ ⚡ EJECUCIÓN 2026 (Activo) ] */}
+            <button
+              type="button"
+              onClick={() => onFiscalYearChange(2026)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ${
+                currentFiscalYear === 2026
+                  ? 'bg-[#da291c] text-white shadow-md ring-1 ring-white/30 font-bold'
+                  : 'text-[#d2d2d2] hover:text-white hover:bg-white/10'
+              }`}
+              title="Ejercicio 2026 en curso: Readecuación, Bolsa de proyectos y Ejecución técnica"
+            >
+              <span className="text-sm">⚡</span>
+              <span>EJECUCIÓN 2026</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                currentFiscalYear === 2026 ? 'bg-white/20 text-white' : 'bg-white/10 text-slate-300'
+              }`}>
+                Activo
+              </span>
+            </button>
+
+            {/* [ 📝 PLANIFICACIÓN 2027 (En Formulación) ] */}
+            <button
+              type="button"
+              onClick={() => onFiscalYearChange(2027)}
+              className={`px-3 py-1.5 text-xs font-semibold rounded-md transition-all whitespace-nowrap cursor-pointer flex items-center gap-1.5 ml-1 ${
+                currentFiscalYear === 2027
+                  ? 'bg-[#ff6900] text-black shadow-md ring-1 ring-black/30 font-extrabold'
+                  : 'text-[#d2d2d2] hover:text-white hover:bg-white/10'
+              }`}
+              title="Planificación 2027: Formulación técnica con plazo en Septiembre, Asignación Contable y APRE"
+            >
+              <span className="text-sm">📝</span>
+              <span>PLANIFICACIÓN 2027</span>
+              <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${
+                currentFiscalYear === 2027 ? 'bg-black/20 text-black' : 'bg-[#ff6900]/20 text-[#ff6900]'
+              }`}>
+                En Formulación
+              </span>
+            </button>
+
+            {/* Historical Selector: 2025, 2024 */}
+            <div className="relative border-l border-[#333333] ml-1 pl-1">
+              <select
+                aria-label="Ejercicios Históricos"
+                value={currentFiscalYear <= 2025 ? currentFiscalYear : 'more'}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10);
+                  if (!isNaN(val)) {
+                    onFiscalYearChange(val);
+                  }
+                }}
+                className={`bg-transparent text-xs font-semibold px-2 py-1.5 rounded cursor-pointer outline-none transition-colors ${
+                  currentFiscalYear <= 2025
+                    ? 'bg-amber-600/30 text-amber-300 font-bold ring-1 ring-amber-400/40'
+                    : 'text-[#d2d2d2] hover:text-white'
+                }`}
+              >
+                <option value="more" disabled className="bg-[#1c1c1c] text-[#888888]">
+                  🏛️ Históricos...
+                </option>
+                <option value="2025" className="bg-[#1c1c1c] text-white">
+                  🏛️ Histórico 2025
+                </option>
+                <option value="2024" className="bg-[#1c1c1c] text-white">
+                  🏛️ Histórico 2024
+                </option>
+              </select>
+            </div>
+          </div>
+
+          {/* 2. Selector de Rol */}
           <div className="flex items-center bg-[#151515] p-1 rounded-lg border border-[#333333]">
             <span className="text-xs font-semibold text-[#d2d2d2] px-2.5 flex items-center gap-1.5 border-r border-[#333333] mr-1">
               <UserCheck className="w-3.5 h-3.5 text-[#ff6900]" />

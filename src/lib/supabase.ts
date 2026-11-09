@@ -68,13 +68,53 @@ export function clearSupabaseCredentials() {
   }
 }
 
+// SQL Migration Script for existing databases (adds missing columns without dropping tables)
+export const SUPABASE_MIGRATION_SQL = `-- ==============================================================
+-- UNIVERSIDAD AUTÓNOMA DE CHILE (SEDE TALCA)
+-- ACTUALIZACIÓN / MIGRACIÓN RÁPIDA DE COLUMNAS (TABLAS EXISTENTES)
+-- ==============================================================
+
+-- 1. Actualizar tabla proyectos (Techo presupuestario, año fiscal y cortes)
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS approved_ceiling_clp NUMERIC;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS fiscal_year INTEGER DEFAULT 2026;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS paused_in_post_cut BOOLEAN DEFAULT FALSE;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS is_extrapresupuestario BOOLEAN DEFAULT FALSE;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS apre_codigo_pres TEXT;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS reported_to_apre BOOLEAN DEFAULT FALSE;
+
+-- 2. Actualizar tabla items_gasto
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS justification TEXT DEFAULT '';
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS account_code TEXT;
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS apre_pres_codigo TEXT;
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS apre_approved_clp NUMERIC DEFAULT 0;
+
+-- 3. Actualizar tabla apre_presupuesto_aprobado
+ALTER TABLE IF EXISTS apre_presupuesto_aprobado ADD COLUMN IF NOT EXISTS excluded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE IF EXISTS apre_presupuesto_aprobado ADD COLUMN IF NOT EXISTS exclusion_reason TEXT;
+
+-- 4. Notificar a PostgREST para recargar la caché de columnas inmediatamente:
+NOTIFY pgrst, 'reload schema';
+`;
+
 // SQL Script generator for the user to execute in Supabase SQL editor
 export const SUPABASE_SQL_SCHEMA = `-- ==============================================================
 -- UNIVERSIDAD AUTÓNOMA DE CHILE (SEDE TALCA)
--- ESQUEMA DE BASE DE DATOS PRESUPUESTARIA TIC 2026 EN SUPABASE
+-- ESQUEMA DE BASE DE DATOS PRESUPUESTARIA TIC EN SUPABASE
 -- ==============================================================
 
--- 1. Tabla de Proyectos de Formulación y Ejecución TIC
+-- 1. Migración rápida si las tablas ya existen:
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS approved_ceiling_clp NUMERIC;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS fiscal_year INTEGER DEFAULT 2026;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS paused_in_post_cut BOOLEAN DEFAULT FALSE;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS is_extrapresupuestario BOOLEAN DEFAULT FALSE;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS apre_codigo_pres TEXT;
+ALTER TABLE IF EXISTS proyectos ADD COLUMN IF NOT EXISTS reported_to_apre BOOLEAN DEFAULT FALSE;
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS justification TEXT DEFAULT '';
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS account_code TEXT;
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS apre_pres_codigo TEXT;
+ALTER TABLE IF EXISTS items_gasto ADD COLUMN IF NOT EXISTS apre_approved_clp NUMERIC DEFAULT 0;
+
+-- 2. Tabla de Proyectos de Formulación y Ejecución TIC
 CREATE TABLE IF NOT EXISTS proyectos (
   id TEXT PRIMARY KEY,
   code TEXT NOT NULL UNIQUE,
@@ -93,6 +133,8 @@ CREATE TABLE IF NOT EXISTS proyectos (
   is_extrapresupuestario BOOLEAN NOT NULL DEFAULT FALSE,
   paused_in_post_cut BOOLEAN NOT NULL DEFAULT FALSE,
   apre_codigo_pres TEXT,
+  fiscal_year INTEGER NOT NULL DEFAULT 2026,
+  reported_to_apre BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -107,6 +149,8 @@ CREATE TABLE IF NOT EXISTS items_gasto (
   unit_price_clp NUMERIC NOT NULL DEFAULT 0,
   total_price_clp NUMERIC NOT NULL DEFAULT 0,
   account_code TEXT, -- Cuenta contable oficial asignada en Etapa 2
+  apre_pres_codigo TEXT,
+  apre_approved_clp NUMERIC DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -168,4 +212,10 @@ CREATE INDEX IF NOT EXISTS idx_items_account ON items_gasto(account_code);
 CREATE INDEX IF NOT EXISTS idx_apre_cuenta ON apre_presupuesto_aprobado(codigo_cuenta);
 CREATE INDEX IF NOT EXISTS idx_proyectos_area ON proyectos(area);
 CREATE INDEX IF NOT EXISTS idx_proyectos_status ON proyectos(execution_status);
+
+-- Actualización / Migración de columnas de exclusión en APRE
+ALTER TABLE apre_presupuesto_aprobado
+  ADD COLUMN IF NOT EXISTS excluded BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE apre_presupuesto_aprobado
+  ADD COLUMN IF NOT EXISTS exclusion_reason TEXT;
 `;

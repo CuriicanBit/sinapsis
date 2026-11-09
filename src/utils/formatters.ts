@@ -1,6 +1,6 @@
 import { AccountingAccount, Project, ApreApprovedRecord, Area } from '../types/budget';
 
-export const OFFICIAL_ACCOUNTS: AccountingAccount[] = [
+export let OFFICIAL_ACCOUNTS: AccountingAccount[] = [
   {
     code: '1203101',
     name: 'MAQUINAS Y EQUIPOS',
@@ -108,6 +108,16 @@ export const OFFICIAL_ACCOUNTS: AccountingAccount[] = [
   },
 ];
 
+export function updateOfficialAccounts(newAccounts: any[]) {
+  OFFICIAL_ACCOUNTS = newAccounts.map((a) => ({
+    code: String(a.code),
+    name: a.name,
+    type: a.type || 'Gasto',
+    categoryLabel: a.categoryLabel || a.category_label || (a.type === 'Activo' ? 'Inversión' : 'Operación'),
+    description: a.description || '',
+  }));
+}
+
 export interface AreaStyle {
   label: Area;
   badge: string;
@@ -210,7 +220,7 @@ export function getAccountByCode(code?: string): AccountingAccount | undefined {
 }
 
 // Generate CSV conforming to the exact 27 corporate columns expected by the APRE platform
-export function generateRealApreExportCSV(projects: Project[]): string {
+export function generateRealApreExportCSV(projects: Project[], fiscalYear: number = 2026): string {
   const headers = [
     'DISTRIBUCIÓN',
     'CÓDIGO PRES',
@@ -246,6 +256,7 @@ export function generateRealApreExportCSV(projects: Project[]): string {
   let presCounter = 761520;
 
   projects.forEach((proj) => {
+    const projYear = proj.fiscalYear || fiscalYear;
     proj.items.forEach((item) => {
       presCounter++;
       const account = getAccountByCode(item.accountCode);
@@ -257,9 +268,9 @@ export function generateRealApreExportCSV(projects: Project[]): string {
       const itemCosto = isActivo ? 'ITEM ACTIVO' : 'MAQ. Y EQUIPO';
 
       const row = [
-        `"[2026] ${MONTH_NAMES[proj.estimatedStartMonth - 1]?.toUpperCase() || 'MARZO'} A NOVIEMBRE"`,
-        `"${proj.apreCodigoPres || presCounter}"`,
-        `"2026"`,
+        `"[${projYear}] ${MONTH_NAMES[proj.estimatedStartMonth - 1]?.toUpperCase() || 'MARZO'} A NOVIEMBRE"`,
+        `"${item.aprePresCodigo || presCounter}"`,
+        `"${projYear}"`,
         `"TALCA"`,
         `"${codigoTipoCuenta}"`,
         `"${tipoCuenta}"`,
@@ -273,7 +284,7 @@ export function generateRealApreExportCSV(projects: Project[]): string {
         `"${itemCosto}"`,
         `"${proj.title.replace(/"/g, '""')} - ${item.description.replace(/"/g, '""')}"`,
         `"${proj.justification.replace(/"/g, '""').replace(/\n/g, ' ')}"`,
-        `"[2026] CLP Monto: ${Math.round(item.totalPriceCLP)} Cantidad: ${item.quantity}"`,
+        `"[${projYear}] CLP Monto: ${Math.round(item.totalPriceCLP)} Cantidad: ${item.quantity}"`,
         `${Math.round(item.totalPriceCLP)}`,
         `0`,
         `${Math.round(item.totalPriceCLP)}`,
@@ -293,18 +304,47 @@ export function generateRealApreExportCSV(projects: Project[]): string {
   return bom + [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\r\n');
 }
 
-export function downloadApreExportCSV(projects: Project[], filename = 'PRESUPUESTO_CARGA_APRE_2026.csv') {
-  const csvData = generateRealApreExportCSV(projects);
+export function downloadApreExportCSV(projects: Project[], fiscalYear: number = 2026, filename?: string) {
+  const finalFilename = filename || `PRESUPUESTO_CARGA_APRE_${fiscalYear}.csv`;
+  const csvData = generateRealApreExportCSV(projects, fiscalYear);
   const blob = new Blob([csvData], { type: 'text/csv;charset=utf-8;' });
   const link = document.createElement('a');
   const url = URL.createObjectURL(blob);
   link.setAttribute('href', url);
-  link.setAttribute('download', filename);
+  link.setAttribute('download', finalFilename);
   link.style.visibility = 'hidden';
   document.body.appendChild(link);
   link.click();
   document.body.removeChild(link);
   URL.revokeObjectURL(url);
+}
+
+// Suggest exclusion for imported APRE records
+export function suggestExclusion(record: ApreApprovedRecord): { excluded: boolean; reason: string | null; } {
+  // Función que limpia tildes y mayúsculas
+  const norm = (s: string) => String(s || '').normalize("NFD").replace(/[\u0300-\u036f]/g, "").toUpperCase().trim();
+
+  const sucursal = norm(record.sucursal);
+  const centro = norm(record.centroCosto);
+  const grupo = norm(record.grupoCuenta);
+  const codGrupo = String(record.codigoGrupoCuenta || '').trim();
+
+  // 1) Excluir Sede Corporativa (si sucursal no dice TALCA o centro no dice INFORMATICA)
+  if (sucursal !== 'TALCA' || (centro !== '' && !centro.includes('INFORMATICA'))) {
+    return { excluded: true, reason: 'Centro costo no TIC (SEDE CORPORATIVA)' };
+  }
+
+  // 2) Excluir Gastos en Personal
+  if (grupo.includes('PERSONAL') || codGrupo === '3') {
+    return { excluded: true, reason: 'Gastos en personal' };
+  }
+
+  // 3) Excluir Monto Cero
+  if (record.montoTotal <= 0) {
+    return { excluded: true, reason: 'Monto aprobado $0' };
+  }
+
+  return { excluded: false, reason: null };
 }
 
 // Parse imported APRE approval CSV file
@@ -351,6 +391,14 @@ export function parseApreApprovedCSV(csvContent: string): ApreApprovedRecord[] {
 
   const headers = parseLine(headerLine).map((h) => h.replace(/^"|"$/g, '').toUpperCase().trim());
 
+  const normalizeStr = (str: string) =>
+    String(str || '')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toUpperCase()
+      .replace(/\s+/g, ' ')
+      .trim();
+
   const records: ApreApprovedRecord[] = [];
 
   for (let i = 1; i < lines.length; i++) {
@@ -359,7 +407,8 @@ export function parseApreApprovedCSV(csvContent: string): ApreApprovedRecord[] {
 
     const getCol = (possibleNames: string[]): string => {
       for (const name of possibleNames) {
-        const idx = headers.indexOf(name);
+        const searchName = normalizeStr(name);
+        const idx = headers.findIndex((h) => normalizeStr(h) === searchName);
         if (idx !== -1 && row[idx] !== undefined) {
           return row[idx].replace(/^"|"$/g, '').trim();
         }
@@ -367,18 +416,18 @@ export function parseApreApprovedCSV(csvContent: string): ApreApprovedRecord[] {
       return '';
     };
 
-    const codigoPres = getCol(['CÓDIGO PRES', 'CODIGO PRES', 'CODIGO_PRES', 'CODIGO']);
+    const codigoPres = getCol(['CÓDIGO PRESUPUESTO', 'CODIGO PRESUPUESTO', 'CÓDIGO PRES', 'CODIGO PRES', 'CODIGO_PRES', 'CODIGO']);
     const montoTotalStr = getCol(['MONTO TOTAL', 'MONTO_TOTAL', 'MONTO']);
     const montoEjecStr = getCol(['MONTO EJECUTADO', 'MONTO_EJECUTADO']);
     const saldoStr = getCol(['SALDO']);
     const cuentaContable = getCol(['CUENTA CONTABLE', 'CUENTA_CONTABLE', 'CUENTA']);
-    const codigoCuenta = getCol(['CÓDIGO CUENTA', 'CODIGO CUENTA', 'CODIGO_CUENTA']);
+    const codigoCuenta = getCol(['CÓDIGO CUENTA CONTABLE', 'CODIGO CUENTA CONTABLE', 'CÓDIGO CUENTA', 'CODIGO CUENTA', 'CODIGO_CUENTA']);
     const detalle = getCol(['DETALLE', 'NOMBRE_PROYECTO', 'DESCRIPCION']);
     const justificacion = getCol(['JUSTIFICACIÓN', 'JUSTIFICACION']);
     const sucursal = getCol(['SUCURSAL']) || 'TALCA';
-    const centroCosto = getCol(['CENTRO COSTO', 'CENTRO_COSTO']) || 'INFORMÁTICA';
+    const centroCosto = getCol(['CENTRO COSTO', 'CENTRO_COSTO', 'CENTRO DE COSTO']) || 'INFORMÁTICA';
     const tipoCuenta = getCol(['TIPO CUENTA', 'TIPO_CUENTA']) || 'GASTOS';
-    const grupoCuenta = getCol(['GRUPO CUENTA', 'GRUPO_CUENTA']) || 'GASTOS DE OPERACIÓN';
+    const grupoCuenta = getCol(['GRUPO CUENTA', 'GRUPO_CUENTA', 'GRUPO']) || 'GASTOS DE OPERACIÓN';
     const itemCosto = getCol(['ITEM COSTO', 'ITEM_COSTO']) || 'INFORMÁTICO';
     const cantidadDesc = getCol(['CANTIDAD', 'CANTIDAD_DESC']) || '';
 
@@ -386,14 +435,14 @@ export function parseApreApprovedCSV(csvContent: string): ApreApprovedRecord[] {
     const montoEjecutado = parseInt(montoEjecStr.replace(/[^0-9]/g, ''), 10) || 0;
     const saldo = parseInt(saldoStr.replace(/[^0-9]/g, ''), 10) || montoTotal;
 
-    records.push({
+    const record: ApreApprovedRecord = {
       distribucion: getCol(['DISTRIBUCIÓN', 'DISTRIBUCION']) || '[2026] MARZO A NOVIEMBRE',
       codigoPres: codigoPres || `APRE-${i}`,
-      ano: 2026,
+      ano: parseInt(getCol(['AÑO', 'ANO', 'EJERCICIO']), 10) || 2026,
       sucursal,
       codigoTipoCuenta: getCol(['CÓDIGO TIPO CUENTA', 'CODIGO TIPO CUENTA']) || '8',
       tipoCuenta,
-      codigoCentro: getCol(['CÓDIGO CENTRO', 'CODIGO CENTRO']) || '621007',
+      codigoCentro: getCol(['CÓDIGO CENTRO', 'CODIGO CENTRO', 'COD_CENTRO', 'CÓD. CENTRO', 'COD. CENTRO', 'CODIGO_CENTRO', 'CÓDIGO CENTRO COSTO', 'CODIGO CENTRO COSTO']) || '621007',
       centroCosto,
       codigoGrupoCuenta: getCol(['CÓDIGO GRUPO CUENTA', 'CODIGO GRUPO CUENTA']) || '2',
       grupoCuenta,
@@ -410,7 +459,12 @@ export function parseApreApprovedCSV(csvContent: string): ApreApprovedRecord[] {
       divisa: 'PESO CHILENO',
       ctaCorriente: '44074221',
       usuarioCre: getCol(['USUARIO CRE', 'USUARIO_CRE']) || 'APRE CORPORATIVO',
-    });
+    };
+
+    const s = suggestExclusion(record);
+    record.excluded = s.excluded;
+    record.exclusionReason = s.reason || undefined;
+    records.push(record);
   }
 
   return records;

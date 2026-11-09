@@ -18,7 +18,7 @@ export type Area =
   | 'Salas Especiales' 
   | 'CCTV';
 
-export const OFFICIAL_AREAS: Area[] = [
+export let OFFICIAL_AREAS: Area[] = [
   'Usuarios',
   'Laboratorios',
   'Salas de Clases',
@@ -28,7 +28,7 @@ export const OFFICIAL_AREAS: Area[] = [
   'CCTV',
 ];
 
-export const OFFICIAL_TECHNICIANS = [
+export let OFFICIAL_TECHNICIANS: string[] = [
   'Cristian',
   'Claudio',
   'Juan',
@@ -37,6 +37,14 @@ export const OFFICIAL_TECHNICIANS = [
   'Marianela',
   'Esteban',
 ];
+
+export function updateOfficialAreas(data: any[]) {
+  OFFICIAL_AREAS = data.map((a) => (typeof a === 'string' ? a : a.name));
+}
+
+export function updateOfficialTechnicians(data: any[]) {
+  OFFICIAL_TECHNICIANS = data.map((t) => (typeof t === 'string' ? t : t.name));
+}
 
 export type AccountType = 'Activo' | 'Gasto'; // Activo = Inversión/CAPEX, Gasto = Operación/OPEX
 
@@ -56,6 +64,10 @@ export interface BudgetItem {
   unitPriceCLP: number;
   totalPriceCLP: number;
   accountCode?: string;
+  aprePresCodigo?: string;
+  apreApprovedCLP?: number;
+  montoCotizadoCLP?: number;
+  montoEjecutadoFinalCLP?: number;
 }
 
 export type ReviewStatus = 'Borrador' | 'En Revisión' | 'Aprobado' | 'Ajuste Solicitado';
@@ -71,6 +83,17 @@ export interface BitacoraEntry {
   author: string;
   role: Role;
 }
+
+export interface ProjectMilestone {
+  id: string;
+  projectId: string;
+  title: string;
+  date: string; // YYYY-MM-DD
+  description?: string;
+  completed: boolean;
+}
+
+export type HitoProyecto = ProjectMilestone;
 
 export interface Project {
   id: string;
@@ -91,9 +114,16 @@ export interface Project {
   isExtrapresupuestario: boolean;
   bitacora: BitacoraEntry[];
   pausedInPostCut?: boolean;
-  apreCodigoPres?: string;
-  apreAprobadoCLP?: number;
-  apreSaldoCLP?: number;
+  fiscalYear?: number; // 2026 (Ejecución activa), 2027 (Planificación), 2025 (Histórico)
+  reportedToApre?: boolean; // True si ya fue reportado/cargado en APRE (evita doble conteo de ejecución)
+  // Flujo de Abastecimiento y Pago (Marianela)
+  especificacionesTecnicas?: string;
+  proveedorAdjudicado?: string;
+  recepcionOk?: boolean;
+  enviadoAPago?: boolean;
+  destino?: string;
+  unidadFinanciadora?: string;
+  milestones?: ProjectMilestone[];
 }
 
 export interface ApreApprovedRecord {
@@ -120,6 +150,8 @@ export interface ApreApprovedRecord {
   divisa: string;
   ctaCorriente: string;
   usuarioCre?: string;
+  excluded?: boolean;         // default false si no existe
+  exclusionReason?: string;   // Motivo cuando excluded === true
 }
 
 export interface BudgetCutSimulation {

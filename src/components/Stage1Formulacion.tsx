@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Project, Role, Area, ReviewStatus, BudgetItem, OFFICIAL_AREAS, OFFICIAL_TECHNICIANS } from '../types/budget';
+import { Project, Role, Area, ReviewStatus, BudgetItem } from '../types/budget';
 import { formatCLP, MONTH_NAMES, AREA_CONFIG, formatDateSpanish } from '../utils/formatters';
+import { useCatalog } from '../CatalogContext';
 import { 
   Plus, 
   ChevronDown, 
@@ -31,6 +32,7 @@ interface Stage1FormulacionProps {
   onUpdateProject: (project: Project) => void;
   onDeleteProject: (projectId: string) => void;
   currentRole: Role;
+  currentFiscalYear?: number;
 }
 
 export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
@@ -39,16 +41,19 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
   onUpdateProject,
   onDeleteProject,
   currentRole,
+  currentFiscalYear = 2026,
 }) => {
+  const { areas, tecnicos } = useCatalog();
   const [selectedArea, setSelectedArea] = useState<string>('all');
   const [selectedStatus, setSelectedStatus] = useState<string>('all');
   const [searchTerm, setSearchTerm] = useState<string>('');
   const [expandedProjectId, setExpandedProjectId] = useState<string | null>(projects[0]?.id || null);
   
   // Planning Deadline State (Panel de Control de Paola)
+  const defaultDeadline = currentFiscalYear === 2027 ? '2026-09-30' : '2026-03-31';
   const [isPlanningClosed, setIsPlanningClosed] = useState<boolean>(() => {
     try {
-      const saved = localStorage.getItem('ua_talca_planning_closed_state');
+      const saved = localStorage.getItem(`ua_talca_planning_closed_state_${currentFiscalYear}`);
       return saved === 'true';
     } catch {
       return false;
@@ -57,12 +62,26 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
 
   const [deadlineDate, setDeadlineDate] = useState<string>(() => {
     try {
-      const saved = localStorage.getItem('ua_talca_planning_deadline_date');
-      return saved || '2026-03-31';
+      const saved = localStorage.getItem(`ua_talca_planning_deadline_date_${currentFiscalYear}`);
+      return saved || defaultDeadline;
     } catch {
-      return '2026-03-31';
+      return defaultDeadline;
     }
   });
+
+  // Keep deadline in sync when switching between fiscal years
+  React.useEffect(() => {
+    const dDate = currentFiscalYear === 2027 ? '2026-09-30' : '2026-03-31';
+    try {
+      const savedDate = localStorage.getItem(`ua_talca_planning_deadline_date_${currentFiscalYear}`);
+      const savedClosed = localStorage.getItem(`ua_talca_planning_closed_state_${currentFiscalYear}`);
+      setDeadlineDate(savedDate || dDate);
+      setIsPlanningClosed(savedClosed === 'true');
+    } catch {
+      setDeadlineDate(dDate);
+      setIsPlanningClosed(false);
+    }
+  }, [currentFiscalYear]);
 
   const [isDateModalOpen, setIsDateModalOpen] = useState(false);
   const [tempDate, setTempDate] = useState(deadlineDate);
@@ -79,7 +98,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
     const nextVal = !isPlanningClosed;
     setIsPlanningClosed(nextVal);
     try {
-      localStorage.setItem('ua_talca_planning_closed_state', String(nextVal));
+      localStorage.setItem(`ua_talca_planning_closed_state_${currentFiscalYear}`, String(nextVal));
     } catch (e) {
       console.error(e);
     }
@@ -89,7 +108,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
     e.preventDefault();
     setDeadlineDate(tempDate);
     try {
-      localStorage.setItem('ua_talca_planning_deadline_date', tempDate);
+      localStorage.setItem(`ua_talca_planning_deadline_date_${currentFiscalYear}`, tempDate);
     } catch (e) {
       console.error(e);
     }
@@ -108,6 +127,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
 
   // Form state for creating a new project
   const [newTitle, setNewTitle] = useState('');
+  const [newDestino, setNewDestino] = useState('');
   const [newArea, setNewArea] = useState<Area>('Usuarios');
   const [newResponsible, setNewResponsible] = useState(
     currentRole === 'coordinador' ? 'Paola' : 'Cristian'
@@ -125,6 +145,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
 
   // Form state for editing an existing project in modal
   const [editTitle, setEditTitle] = useState('');
+  const [editDestino, setEditDestino] = useState('');
   const [editArea, setEditArea] = useState<Area>('Usuarios');
   const [editResponsible, setEditResponsible] = useState('');
   const [editStartMonth, setEditStartMonth] = useState(1);
@@ -138,8 +159,6 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
     totalPriceCLP: number;
     accountCode?: string;
   }>>([]);
-
-  const areas: Area[] = OFFICIAL_AREAS;
 
   // Calculations for Stage 1
   const totalProjects = projects.length;
@@ -188,8 +207,8 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
 
   const handleCreateProject = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newTitle.trim() || !newJustification.trim()) {
-      alert('Por favor complete el nombre del proyecto y la justificación técnica.');
+    if (!newTitle.trim() || !newDestino.trim() || !newJustification.trim()) {
+      alert('Por favor complete el nombre, destino y justificación técnica del proyecto.');
       return;
     }
 
@@ -215,10 +234,16 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
 
     const projectTotal = validItems.reduce((sum, it) => sum + it.totalPriceCLP, 0);
 
+    const yearProjectsCount = projects.filter(
+      (p) => (p.fiscalYear || 2026) === currentFiscalYear
+    ).length;
+
     const newProject: Project = {
       id: `proj-${Date.now()}`,
-      code: `TIC-TAL-2026-${String(projects.length + 1).padStart(3, '0')}`,
+      code: `TIC-TAL-${currentFiscalYear}-${String(yearProjectsCount + 1).padStart(3, '0')}`,
+      fiscalYear: currentFiscalYear,
       title: newTitle.trim(),
+      destino: newDestino.trim(),
       area: newArea,
       responsible: newResponsible.trim(),
       estimatedStartMonth: newStartMonth,
@@ -239,6 +264,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
     setIsCreateModalOpen(false);
     // Reset form
     setNewTitle('');
+    setNewDestino('');
     setNewJustification('');
     setNewItems([{ description: '', justification: '', quantity: '1', unitPriceCLP: '' }]);
     setExpandedProjectId(newProject.id);
@@ -248,6 +274,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
   const handleOpenEditProject = (project: Project) => {
     setEditingProject(project);
     setEditTitle(project.title);
+    setEditDestino(project.destino || '');
     setEditArea(project.area);
     setEditResponsible(project.responsible);
     setEditStartMonth(project.estimatedStartMonth);
@@ -302,8 +329,8 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
     e.preventDefault();
     if (!editingProject) return;
 
-    if (!editTitle.trim() || !editJustification.trim()) {
-      alert('Por favor complete el nombre del proyecto y la justificación técnica.');
+    if (!editTitle.trim() || !editDestino.trim() || !editJustification.trim()) {
+      alert('Por favor complete el nombre, destino y justificación técnica del proyecto.');
       return;
     }
 
@@ -333,6 +360,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
     const updated: Project = {
       ...editingProject,
       title: editTitle.trim(),
+      destino: editDestino.trim(),
       area: editArea,
       responsible: editResponsible.trim(),
       estimatedStartMonth: editStartMonth,
@@ -465,7 +493,12 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                 <span className="text-xs text-blue-200">Universidad Autónoma de Chile (Sede Talca)</span>
               </div>
               <h3 className="text-lg font-bold text-white tracking-tight mt-0.5">
-                Plazo de Cierre de Planificación Presupuestaria 2026
+                Plazo de Cierre de Planificación Presupuestaria {currentFiscalYear}
+                {currentFiscalYear === 2027 && (
+                  <span className="ml-2 text-xs font-semibold bg-[#ff6900] text-black px-2 py-0.5 rounded uppercase">
+                    Cierre Septiembre Institucional
+                  </span>
+                )}
               </h3>
             </div>
           </div>
@@ -588,10 +621,10 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
               <span>Levantamiento y Negociación de Requerimientos</span>
             </div>
             <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Formulación Técnica de Proyectos TIC 2026
+              Formulación Técnica de Proyectos TIC {currentFiscalYear}
             </h2>
             <p className="text-base text-slate-600 mt-1 max-w-4xl">
-              Defina o edite proyectos por área, ajuste en reuniones los ítems de hardware, software o servicios con valores referenciales CLP, y mantenga actualizada la justificación técnica antes del cierre de plazo.
+              Defina o edite proyectos por área para el ejercicio {currentFiscalYear}, ajuste en reuniones los ítems de hardware, software o servicios con valores referenciales CLP, y mantenga actualizada la justificación técnica antes del cierre de plazo.
             </p>
           </div>
 
@@ -611,7 +644,7 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                 className="flex items-center gap-2 bg-[#da291c] hover:bg-[#b81e13] text-white font-bold px-5 py-3 rounded-lg shadow-md transition-all text-base cursor-pointer ring-1 ring-white/20"
               >
                 <Plus className="w-5 h-5" />
-                <span>+ Nuevo Proyecto TIC</span>
+                <span>+ Crear Nuevo Proyecto {currentFiscalYear}</span>
               </button>
             )}
           </div>
@@ -706,20 +739,26 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
             Todas ({projects.length})
           </button>
           {areas.map((a) => {
-            const style = AREA_CONFIG[a];
-            const isSelected = selectedArea === a;
-            const count = projects.filter((p) => p.area === a).length;
+            const areaName = a.name as Area;
+            const style = AREA_CONFIG[areaName] || {
+              label: a.name as Area,
+              badge: 'bg-slate-100 text-slate-800 border-slate-300',
+              dot: 'bg-slate-600',
+              border: 'border-l-slate-500',
+            };
+            const isSelected = selectedArea === a.name;
+            const count = projects.filter((p) => p.area === a.name).length;
             return (
               <button
-                key={a}
+                key={a.name}
                 type="button"
-                onClick={() => setSelectedArea(isSelected ? 'all' : a)}
+                onClick={() => setSelectedArea(isSelected ? 'all' : a.name)}
                 className={`inline-flex items-center gap-1.5 px-3 py-1 text-xs rounded-full border transition-all cursor-pointer ${
                   style.badge
                 } ${isSelected ? 'ring-2 ring-blue-600 font-bold shadow-xs' : 'opacity-85 hover:opacity-100'}`}
               >
                 <span className={`w-2 h-2 rounded-full ${style.dot}`} />
-                <span>{a}</span>
+                <span>{a.name}</span>
                 <span className="text-[10px] bg-white/80 px-1.5 py-0.2 rounded-full font-bold ml-0.5">{count}</span>
               </button>
             );
@@ -729,10 +768,29 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
 
       {/* Projects List */}
       <div className="space-y-4">
-        {filteredProjects.length === 0 ? (
+        {projects.length === 0 ? (
+          <div className="bg-white border-2 border-dashed border-slate-300 rounded-2xl p-12 text-center max-w-2xl mx-auto my-8 shadow-xs">
+            <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-amber-50 border border-amber-200 flex items-center justify-center text-[#ff6900]">
+              <PlusCircle className="w-8 h-8" />
+            </div>
+            <h3 className="text-xl font-bold text-slate-900 mb-2">
+              Aún no hay proyectos formulados para el ejercicio {currentFiscalYear}
+            </h3>
+            <p className="text-base text-slate-600 mb-6 max-w-md mx-auto leading-relaxed">
+              Inicie la formulación del anteproyecto presupuestario TIC para {currentFiscalYear} ingresando el primer proyecto y desglosando sus ítems e inversión requerida en CLP.
+            </p>
+            <button
+              onClick={() => setIsCreateModalOpen(true)}
+              className="inline-flex items-center gap-2 bg-[#da291c] hover:bg-[#b81e13] text-white font-bold px-6 py-3 rounded-xl shadow-md transition-all text-base cursor-pointer ring-1 ring-white/20"
+            >
+              <Plus className="w-5 h-5" />
+              <span>+ Crear Nuevo Proyecto {currentFiscalYear}</span>
+            </button>
+          </div>
+        ) : filteredProjects.length === 0 ? (
           <div className="bg-white border border-slate-200 rounded-xl p-12 text-center">
             <p className="text-lg font-medium text-slate-700">No se encontraron proyectos con los filtros seleccionados.</p>
-            <p className="text-sm text-slate-500 mt-1">Pruebe limpiando la búsqueda o agregue un nuevo proyecto técnico.</p>
+            <p className="text-sm text-slate-500 mt-1">Pruebe limpiando la búsqueda o agregue un nuevo proyecto técnico para {currentFiscalYear}.</p>
           </div>
         ) : (
           filteredProjects.map((project) => {
@@ -893,6 +951,18 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                         {project.justification}
                       </p>
                     </div>
+
+                    {/* Destino del Proyecto */}
+                    {project.destino && (
+                      <div className="bg-slate-50 px-4 py-3 rounded-lg border border-slate-200 flex flex-wrap items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-wide text-slate-700">
+                          Destino del Proyecto:
+                        </span>
+                        <span className="text-sm font-semibold text-slate-900 bg-white px-2.5 py-1 rounded border border-slate-300">
+                          {project.destino}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Breakdown of items with In-Place Editing */}
                     <div>
@@ -1214,6 +1284,20 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                   />
                 </div>
 
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-bold text-slate-900 mb-1">
+                    Destino del Proyecto <span className="text-[#da291c]">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newDestino}
+                    onChange={(e) => setNewDestino(e.target.value)}
+                    placeholder="Ej: Campus Alameda - Lab 414"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-base text-slate-900 focus:bg-white focus:border-[#da291c] focus:ring-1 focus:ring-[#da291c]"
+                  />
+                </div>
+
                 <div>
                   <label className="block text-sm font-bold text-slate-900 mb-1">
                     Área TIC <span className="text-[#da291c]">*</span>
@@ -1224,8 +1308,8 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                     className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-base text-slate-900 focus:bg-white focus:border-[#da291c]"
                   >
                     {areas.map((a) => (
-                      <option key={a} value={a}>
-                        {a}
+                      <option key={a.name} value={a.name}>
+                        {a.name}
                       </option>
                     ))}
                   </select>
@@ -1258,9 +1342,9 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                     onChange={(e) => setNewResponsible(e.target.value)}
                     className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-base text-slate-900 focus:bg-white focus:border-[#da291c]"
                   >
-                    {OFFICIAL_TECHNICIANS.map((tech) => (
-                      <option key={tech} value={tech}>
-                        {tech} (Técnico TIC)
+                    {tecnicos.map((tech) => (
+                      <option key={tech.name} value={tech.name}>
+                        {tech.name} (Técnico TIC)
                       </option>
                     ))}
                     <option value="Paola">Paola (Coordinadora TIC)</option>
@@ -1476,6 +1560,20 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                   />
                 </div>
 
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-bold text-slate-800 mb-1">
+                    Destino del Proyecto <span className="text-rose-600">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={editDestino}
+                    onChange={(e) => setEditDestino(e.target.value)}
+                    placeholder="Ej: Campus Alameda - Lab 414"
+                    className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-base text-slate-900 focus:bg-white focus:border-blue-600 font-semibold"
+                  />
+                </div>
+
                 <div>
                   <label className="block text-sm font-bold text-slate-800 mb-1">
                     Área TIC <span className="text-rose-600">*</span>
@@ -1486,8 +1584,8 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                     className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-base text-slate-900 focus:bg-white"
                   >
                     {areas.map((a) => (
-                      <option key={a} value={a}>
-                        {a}
+                      <option key={a.name} value={a.name}>
+                        {a.name}
                       </option>
                     ))}
                   </select>
@@ -1520,9 +1618,9 @@ export const Stage1Formulacion: React.FC<Stage1FormulacionProps> = ({
                     onChange={(e) => setEditResponsible(e.target.value)}
                     className="w-full p-2.5 bg-slate-50 border border-slate-300 rounded-lg text-base text-slate-900 focus:bg-white"
                   >
-                    {OFFICIAL_TECHNICIANS.map((tech) => (
-                      <option key={tech} value={tech}>
-                        {tech} (Técnico TIC)
+                    {tecnicos.map((tech) => (
+                      <option key={tech.name} value={tech.name}>
+                        {tech.name} (Técnico TIC)
                       </option>
                     ))}
                     <option value="Paola">Paola (Coordinadora TIC)</option>
